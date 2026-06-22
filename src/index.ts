@@ -62,12 +62,18 @@ const GenesysParseRequestSchema = z.object({
 	html: z.boolean().default(true),
 });
 
-async function getGenesysToken(clientId: string, clientSecret: string): Promise<string> {
-	const credentials = btoa(`${clientId}:${clientSecret}`);
+async function getGenesysToken(clientIdOrAuthHeader: string, clientSecret?: string): Promise<string> {
+	// If a client secret is provided, build a Basic auth header from id:secret.
+	// Otherwise treat the first argument as a full Authorization header value
+	// (for example: "Basic <base64>").
+	const authHeader = clientSecret
+		? `Basic ${btoa(`${clientIdOrAuthHeader}:${clientSecret}`)}`
+		: clientIdOrAuthHeader;
+
 	const res = await fetch("https://login.mypurecloud.com/oauth/token", {
 		method: "POST",
 		headers: {
-			"Authorization": `Basic ${credentials}`,
+			"Authorization": authHeader,
 			"Content-Type": "application/x-www-form-urlencoded",
 		},
 		body: "grant_type=client_credentials",
@@ -128,10 +134,18 @@ class GenesysTemplateParse extends OpenAPIRoute {
 		const data = await this.getValidatedData<typeof this.schema>();
 		const { name, content, html } = data.body;
 
-		try {
-			const { GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET, GENESYS_LIBRARY_ID } = c.env;
-			const token = await getGenesysToken(GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET);
-			const template = await getGenesysCannedResponse(token, GENESYS_LIBRARY_ID, name);
+			try {
+				const { GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET, GENESYS_LIBRARY_ID } = c.env;
+			// Prefer an Authorization header from the request; fall back to configured secrets.
+			const authHeader = c.req?.header("authorization");
+			const token = authHeader
+				? await getGenesysToken(authHeader)
+				: await getGenesysToken(GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET);
+
+			// Prefer a custom header `Genesys-Library-Id` over the configured var.
+			const libraryHeader = c.req?.headers?.get("genesys-library-id");
+			const libraryId = libraryHeader && libraryHeader.trim().length > 0 ? libraryHeader : GENESYS_LIBRARY_ID;
+			const template = await getGenesysCannedResponse(token, libraryId, name);
 			const result = parseTemplate(template, content, html);
 			return c.json(result);
 		} catch (e) {

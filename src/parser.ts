@@ -5,17 +5,43 @@ function escapeRegex(s: string): string {
 }
 
 export function stripHtml(html: string): string {
-	return html
-		.replace(/&nbsp;/gi, " ")
-		.replace(/&amp;/gi, "&")
-		.replace(/&lt;/gi, "<")
-		.replace(/&gt;/gi, ">")
-		.replace(/&quot;/gi, '"')
-		.replace(/&#39;/gi, "'")
-		.replace(/&#x27;/gi, "'")
-		.replace(/<[^>]*>/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
+	// Remove tags first, then decode entities to preserve intended characters
+	const withoutTags = html.replace(/<[^>]*>/g, "");
+	const decoded = decodeHtmlEntities(withoutTags);
+	return decoded.replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(str: string): string {
+	if (!str) return str;
+
+	// Replace numeric decimal entities: &#NNNN;
+	str = str.replace(/&#(\d+);/g, (_, dec) => {
+		const code = parseInt(dec, 10);
+		return Number.isNaN(code) ? `` : String.fromCodePoint(code);
+	});
+
+	// Replace numeric hex entities: &#xHHHH;
+	str = str.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+		const code = parseInt(hex, 16);
+		return Number.isNaN(code) ? `` : String.fromCodePoint(code);
+	});
+
+	// Some common named entities mapping. This covers typical Latin-1 and punctuation
+	// used in content. Unknown named entities are left unchanged.
+	const named: Record<string, string> = {
+		nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+		Aacute: 'Á', aacute: 'á', Eacute: 'É', eacute: 'é', Iacute: 'Í', iacute: 'í',
+		Oacute: 'Ó', oacute: 'ó', Uacute: 'Ú', uacute: 'ú', Ntilde: 'Ñ', ntilde: 'ñ',
+		AElig: 'Æ', aelig: 'æ', Ccedil: 'Ç', ccedil: 'ç', Oslash: 'Ø', oslash: 'ø',
+		Uuml: 'Ü', uuml: 'ü', copy: '©', reg: '®', trade: '™', ndash: '–', mdash: '—',
+		hellip: '…', deg: '°', para: '¶', middot: '·', bull: '•'
+	};
+
+	str = str.replace(/&([a-zA-Z]+);/g, (_, name) => {
+		return named[name] ?? `&${name};`;
+	});
+
+	return str;
 }
 
 export function buildPattern(template: string): RegExp {

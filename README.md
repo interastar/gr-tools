@@ -95,6 +95,15 @@ Configurar con `wrangler secret put <nombre>`:
 |---|---|
 | `GENESYS_CLIENT_SECRET` | Client Secret de la aplicación OAuth en Genesys Cloud |
 
+### Request headers
+
+The Genesys integration accepts two optional request headers that override the configured vars/secrets for a single request:
+
+- `Authorization`: full Authorization header to use for obtaining the Genesys OAuth token (for example `Basic <base64>`). If present, the worker will use this value directly to request a token. If absent, the worker falls back to the configured `GENESYS_CLIENT_ID` + `GENESYS_CLIENT_SECRET`.
+- `Genesys-Library-Id`: ID of the Genesys canned responses library. If present, this header value will be used instead of the `GENESYS_LIBRARY_ID` var from configuration.
+
+Provide these headers when calling `POST /api/parse/template` to use per-request credentials or a different library ID.
+
 ## Desarrollo local
 
 ```bash
