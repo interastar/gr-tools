@@ -1,25 +1,114 @@
-# Cloudflare Workers OpenAPI 3.1
+# GR Tools
 
-This is a Cloudflare Worker with OpenAPI 3.1 using [chanfana](https://github.com/cloudflare/chanfana) and [Hono](https://github.com/honojs/hono).
+API REST construida sobre Cloudflare Workers con documentación OpenAPI 3.1 automática. Expone utilidades internas del Grupo GR, comenzando con parseo de contenido basado en plantillas.
 
-This is an example project made to be used as a quick start into building OpenAPI compliant Workers that generates the
-`openapi.json` schema automatically from code and validates the incoming request to the defined parameters or request body.
+## Stack
 
-## Get started
+- [Cloudflare Workers](https://workers.dev) — runtime serverless en el edge
+- [Hono](https://github.com/honojs/hono) — router HTTP
+- [chanfana](https://github.com/cloudflare/chanfana) — generación automática de esquema OpenAPI 3.1 y validación de requests
+- [Zod](https://zod.dev) — validación de tipos en runtime
 
-1. Sign up for [Cloudflare Workers](https://workers.dev). The free tier is more than enough for most use cases.
-2. Clone this project and install dependencies with `npm install`
-3. Run `wrangler login` to login to your Cloudflare account in wrangler
-4. Run `wrangler deploy` to publish the API to Cloudflare Workers
+## Endpoints
 
-## Project structure
+### `POST /api/parse`
 
-1. Your main router is defined in `src/index.ts`.
-2. Each endpoint has its own file in `src/endpoints/`.
-3. For more information read the [chanfana documentation](https://chanfana.pages.dev/) and [Hono documentation](https://hono.dev/docs).
+Extrae variables de un texto usando una plantilla inversa con marcadores `{variable}`.
 
-## Development
+**Body:**
+```json
+{
+  "template": "Hola {nombre}, tu pedido {pedido} está listo.",
+  "content": "<p>Hola Juan, tu pedido #4521 está listo.</p>",
+  "html": true
+}
+```
 
-1. Run `wrangler dev` to start a local instance of the API.
-2. Open `http://localhost:8787/` in your browser to see the Swagger interface where you can try the endpoints.
-3. Changes made in the `src/` folder will automatically trigger the server to reload, you only need to refresh the Swagger interface.
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `template` | `string` | Plantilla con marcadores `{variable}` |
+| `content` | `string` | Contenido del que se extraen los valores |
+| `html` | `boolean` | Si `true` (default), limpia tags HTML y entidades antes de parsear |
+
+**Respuesta `200`:**
+```json
+{
+  "nombre": "Juan",
+  "pedido": "#4521"
+}
+```
+
+---
+
+### `POST /api/parse/template`
+
+Igual que `/api/parse` pero en lugar de recibir la plantilla en el body, la obtiene por nombre desde la biblioteca de respuestas enlatadas de Genesys Cloud. El contenido HTML de la respuesta enlatada se sanitiza automáticamente antes de usarse como plantilla.
+
+**Body:**
+```json
+{
+  "name": "Confirmacion de pedido",
+  "content": "<p>Hola Juan, tu pedido #4521 está listo.</p>",
+  "html": true
+}
+```
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `name` | `string` | Nombre exacto de la respuesta enlatada en Genesys |
+| `content` | `string` | Contenido del que se extraen los valores |
+| `html` | `boolean` | Si `true` (default), limpia tags HTML y entidades antes de parsear |
+
+**Respuesta `200`:**
+```json
+{
+  "nombre": "Juan",
+  "pedido": "#4521"
+}
+```
+
+**Respuesta `422`** (template no encontrada o contenido no coincide):
+```json
+{
+  "error": "Canned response not found: \"Confirmacion de pedido\""
+}
+```
+
+---
+
+La documentación Swagger interactiva está disponible en la raíz del Worker (`GET /`).
+
+## Configuración
+
+### Variables de entorno (`wrangler.jsonc`)
+
+| Variable | Descripción |
+|---|---|
+| `GENESYS_LIBRARY_ID` | ID de la biblioteca de respuestas enlatadas en Genesys Cloud |
+| `GENESYS_CLIENT_ID` | Client ID de la aplicación OAuth en Genesys Cloud |
+
+### Secrets (no van en el repositorio)
+
+Configurar con `wrangler secret put <nombre>`:
+
+| Secret | Descripción |
+|---|---|
+| `GENESYS_CLIENT_SECRET` | Client Secret de la aplicación OAuth en Genesys Cloud |
+
+## Desarrollo local
+
+```bash
+npm install
+wrangler login
+wrangler dev
+```
+
+Abrir `http://localhost:8787/` para acceder al Swagger UI.
+
+## Deploy
+
+```bash
+wrangler deploy
+```
+
+El Worker se crea automáticamente en Cloudflare si no existe.

@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "gr-parser",
+	"name": "gr-tools",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-06-21",
 	"observability": {
@@ -13,7 +13,7 @@
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"
-	]
+	],
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
@@ -31,7 +31,11 @@
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
+	"vars": {
+		"GENESYS_CLIENT_ID": "b7df372e-70b8-4d29-b169-7b8a9fdc3a81",
+		"GENESYS_LIBRARY_ID": "73333a87-0b93-4acd-920e-f21cb2b23c1b"
+	}
+	// Secrets (set via: wrangler secret put GENESYS_CLIENT_ID / GENESYS_CLIENT_SECRET)
 	/**
 	 * Static Assets
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
