@@ -102,7 +102,11 @@ The Genesys integration accepts two optional request headers that override the c
 - `Authorization`: full Authorization header to use for obtaining the Genesys OAuth token (for example `Basic <base64>`). If present, the worker will use this value directly to request a token. If absent, the worker falls back to the configured `GENESYS_CLIENT_ID` + `GENESYS_CLIENT_SECRET`.
 - `Genesys-Library-Id`: ID of the Genesys canned responses library. If present, this header value will be used instead of the `GENESYS_LIBRARY_ID` var from configuration.
 
-Provide these headers when calling `POST /api/parse/template` to use per-request credentials or a different library ID.
+- `Genesys-Debug`: when set to `true` (case-insensitive) the worker will emit debug logs to Cloudflare logs for the parsing endpoints. Debug logs include:
+  - For `POST /api/parse`: the provided `template`, the `content`, and the parsed `result` or error.
+  - For `POST /api/parse/template`: the request `content`, the raw Genesys API response, the sanitized `template` used, and the parsed `result` or error.
+
+Provide these headers when calling `POST /api/parse/template` to use per-request credentials or a different library ID, and optionally enable `Genesys-Debug` to capture detailed logs for troubleshooting.
 
 ## Desarrollo local
 

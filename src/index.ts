@@ -47,10 +47,20 @@ class TemplateParse extends OpenAPIRoute {
 		const data = await this.getValidatedData<typeof this.schema>();
 		const { template, content, html } = data.body;
 
+		// Debug header: Genesys-Debug: true|false (case-insensitive). If missing, debug is off.
+		const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+		const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
+
 		try {
+			if (debug) {
+				console.log("[Genesys Debug] TemplateParse - template:", template);
+				console.log("[Genesys Debug] TemplateParse - content:", content);
+			}
 			const result = parseTemplate(template, content, html);
+			if (debug) console.log("[Genesys Debug] TemplateParse - result:", result);
 			return c.json(result);
 		} catch (e) {
+			if (debug) console.log("[Genesys Debug] TemplateParse - error:", (e as Error).message);
 			return c.json({ error: (e as Error).message }, 422);
 		}
 	}
@@ -83,7 +93,7 @@ async function getGenesysToken(clientIdOrAuthHeader: string, clientSecret?: stri
 	return data.access_token;
 }
 
-async function getGenesysCannedResponse(token: string, libraryId: string, name: string): Promise<string> {
+async function getGenesysCannedResponse(token: string, libraryId: string, name: string): Promise<{ template: string; raw: any }> {
 	const url = `https://api.mypurecloud.com/api/v2/responsemanagement/responses?libraryId=${libraryId}&pageSize=200`;
 	const res = await fetch(url, {
 		headers: { "Authorization": `Bearer ${token}` },
@@ -94,7 +104,7 @@ async function getGenesysCannedResponse(token: string, libraryId: string, name: 
 	if (!match) throw new Error(`Canned response not found: "${name}"`);
 	const rawContent = match.texts?.[0]?.content;
 	if (!rawContent) throw new Error(`Canned response "${name}" has no text content`);
-	return stripHtml(rawContent);
+	return { template: stripHtml(rawContent), raw: data };
 }
 
 class GenesysTemplateParse extends OpenAPIRoute {
@@ -134,8 +144,8 @@ class GenesysTemplateParse extends OpenAPIRoute {
 		const data = await this.getValidatedData<typeof this.schema>();
 		const { name, content, html } = data.body;
 
-			try {
-				const { GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET, GENESYS_LIBRARY_ID } = c.env;
+		try {
+			const { GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET, GENESYS_LIBRARY_ID } = c.env;
 			// Prefer an Authorization header from the request; fall back to configured secrets.
 			const authHeader = c.req?.header("authorization");
 			const token = authHeader
@@ -145,10 +155,26 @@ class GenesysTemplateParse extends OpenAPIRoute {
 			// Prefer a custom header `Genesys-Library-Id` over the configured var.
 			const libraryHeader = c.req?.headers?.get("genesys-library-id");
 			const libraryId = libraryHeader && libraryHeader.trim().length > 0 ? libraryHeader : GENESYS_LIBRARY_ID;
-			const template = await getGenesysCannedResponse(token, libraryId, name);
+
+			// Debug header handling
+			const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
+
+			const { template, raw } = await getGenesysCannedResponse(token, libraryId, name);
+			if (debug) {
+				console.log("[Genesys Debug] GenesysTemplateParse - request content:", content);
+				console.log("[Genesys Debug] GenesysTemplateParse - genesys raw response:", raw);
+				console.log("[Genesys Debug] GenesysTemplateParse - template to use:", template);
+			}
+
 			const result = parseTemplate(template, content, html);
+			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - result:", result);
 			return c.json(result);
 		} catch (e) {
+			// Log error when debug enabled
+			const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
+			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - error:", (e as Error).message);
 			return c.json({ error: (e as Error).message }, 422);
 		}
 	}
