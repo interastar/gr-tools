@@ -1,26 +1,70 @@
-import { fromHono } from "chanfana";
+import { fromHono, OpenAPIRoute } from "chanfana";
 import { Hono } from "hono";
-import { TaskCreate } from "./endpoints/taskCreate";
-import { TaskDelete } from "./endpoints/taskDelete";
-import { TaskFetch } from "./endpoints/taskFetch";
-import { TaskList } from "./endpoints/taskList";
+import { z } from "zod";
+import { parseTemplate } from "./parser";
+import type { AppContext } from "./types";
 
-// Start a Hono app
+const ParseRequestSchema = z.object({
+	template: z.string().min(1),
+	content: z.string().min(1),
+	html: z.boolean().default(true),
+});
+
+class TemplateParse extends OpenAPIRoute {
+	schema = {
+		tags: ["Parse"],
+		summary: "Extract data from content using a reverse template",
+		request: {
+			body: {
+				content: {
+					"application/json": {
+						schema: ParseRequestSchema,
+					},
+				},
+			},
+		},
+		responses: {
+			"200": {
+				description: "Key-value pairs extracted from content",
+				content: {
+					"application/json": {
+						schema: z.record(z.string(), z.string()),
+					},
+				},
+			},
+			"422": {
+				description: "Content does not match the template",
+				content: {
+					"application/json": {
+						schema: z.object({ error: z.string() }),
+					},
+				},
+			},
+		},
+	};
+
+	async handle(c: AppContext) {
+		const data = await this.getValidatedData<typeof this.schema>();
+		const { template, content, html } = data.body;
+
+		try {
+			const result = parseTemplate(template, content, html);
+			return c.json(result);
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 422);
+		}
+	}
+}
+
 const app = new Hono<{ Bindings: Env }>();
 
-// Setup OpenAPI registry
 const openapi = fromHono(app, {
 	docs_url: "/",
 });
 
-// Register OpenAPI endpoints
-openapi.get("/api/tasks", TaskList);
-openapi.post("/api/tasks", TaskCreate);
-openapi.get("/api/tasks/:taskSlug", TaskFetch);
-openapi.delete("/api/tasks/:taskSlug", TaskDelete);
+openapi.post("/api/parse", TemplateParse);
 
-// You may also register routes for non OpenAPI directly on Hono
-// app.get('/test', (c) => c.text('Hono!'))
+// 405 fallback for non-POST methods on this route
+app.all("/api/parse", (c) => c.json({ error: "Method Not Allowed" }, 405));
 
-// Export the Hono app
 export default app;
