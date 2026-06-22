@@ -27,7 +27,7 @@ export function buildPattern(template: string): RegExp {
 
 	for (let i = 0; i < parts.length; i++) {
 		if (i % 2 === 0) {
-			pattern += escapeRegex(parts[i]||'').replace(/ +/g, "\\s*");
+			pattern += escapeRegex(parts[i]||'').replace(/ +/g, "\\s+");
 		} else {
 			const isLast = varIndex === varCount - 1;
 			// last variable is greedy (.+) to avoid under-matching when template ends with a variable
