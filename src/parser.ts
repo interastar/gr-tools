@@ -46,22 +46,34 @@ function decodeHtmlEntities(str: string): string {
 
 export function buildPattern(template: string): RegExp {
 	// split gives [literal, varname, literal, varname, ..., literal]
-	const parts = template.split(/\{(\w+)\}/);
-	const varCount = Math.floor(parts.length / 2);
+	// Special placeholder: {...} will match any characters (non-greedy) and is NOT captured.
+	const parts = template.split(/\{(\.\.\.|\w+)\}/);
+	// count only real variables (exclude '...') to determine greediness for the last captured var
+	const varNames = parts
+		.filter((_, idx) => idx % 2 === 1)
+		.filter((n) => n !== "...");
+	const varCount = varNames.length;
 	let pattern = "";
 	let varIndex = 0;
 
 	for (let i = 0; i < parts.length; i++) {
 		if (i % 2 === 0) {
-			pattern += escapeRegex(parts[i]||'').replace(/ +/g, "\\s+");
+			pattern += escapeRegex(parts[i] || "").replace(/ +/g, "\\s+");
 		} else {
-			const isLast = varIndex === varCount - 1;
-			// last variable is greedy (.+) to avoid under-matching when template ends with a variable
-			pattern += `(?<${parts[i]}>${isLast ? ".+" : ".+?"})`;
-			varIndex++;
+			const name = parts[i];
+			if (name === "...") {
+				// match anything (including newlines), non-greedy, do not capture
+				pattern += "(?:[\\s\\S]*?)";
+			} else {
+				const isLast = varIndex === varCount - 1;
+				// last captured variable is greedy (.+) to avoid under-matching when template ends with a variable
+				pattern += `(?<${name}>${isLast ? ".+" : ".+?"})`;
+				varIndex++;
+			}
 		}
 	}
 
+	// allow arbitrary prefix before the template (existing behavior)
 	return new RegExp(`[\\s\\S]*?${pattern}`, "s");
 }
 

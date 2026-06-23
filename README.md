@@ -108,6 +108,21 @@ The Genesys integration accepts two optional request headers that override the c
 
 Provide these headers when calling `POST /api/parse/template` to use per-request credentials or a different library ID, and optionally enable `Genesys-Debug` to capture detailed logs for troubleshooting.
 
+## Template syntax notes
+
+You can use a small template language with placeholders in curly braces:
+
+- `{name}` — captures a named variable.
+- `{...}` — matches (and ignores) any text between surrounding parts (non-greedy). This is useful when the canned response contains variable text you don't want to capture.
+
+Example:
+
+Content: "Inicio de contenido, hola Marco hoy es el 12/12/2020 y necesito 1,000 adios"
+
+Template: "hola {name} {...} necesito {amount}"
+
+Result: `{ "name": "Marco", "amount": "1,000" }`
+
 ## Desarrollo local
 
 ```bash
