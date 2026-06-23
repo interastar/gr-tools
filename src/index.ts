@@ -101,7 +101,7 @@ async function getGenesysCannedResponse(token: string, libraryId: string, name: 
 	if (!res.ok) throw new Error(`Genesys API failed: ${res.status}`);
 	const data = await res.json() as { entities: Array<{ name: string; texts: Array<{ content: string }> }> };
 	const match = data.entities.find((e) => e.name === name);
-	if (!match) throw new Error(`Canned response not found: "${name}"`);
+	if (!match) throw new Error(`Canned response not found: "${name}" in library: ${JSON.stringify(data)}`);
 	const rawContent = match.texts?.[0]?.content;
 	if (!rawContent) throw new Error(`Canned response "${name}" has no text content`);
 	return { template: stripHtml(rawContent), raw: data };
