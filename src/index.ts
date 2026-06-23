@@ -48,7 +48,7 @@ class TemplateParse extends OpenAPIRoute {
 		const { template, content, html } = data.body;
 
 		// Debug header: Genesys-Debug: true|false (case-insensitive). If missing, debug is off.
-		const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+		const debugHeader = c.req?.header("genesys-debug");
 		const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
 
 		try {
@@ -153,11 +153,11 @@ class GenesysTemplateParse extends OpenAPIRoute {
 				: await getGenesysToken(GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET);
 
 			// Prefer a custom header `Genesys-Library-Id` over the configured var.
-			const libraryHeader = c.req?.headers?.get("genesys-library-id");
+			const libraryHeader = c.req?.header("genesys-library-id");
 			const libraryId = libraryHeader && libraryHeader.trim().length > 0 ? libraryHeader : GENESYS_LIBRARY_ID;
 
 			// Debug header handling
-			const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+			const debugHeader = c.req?.header("genesys-debug");
 			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
 
 			const { template, raw } = await getGenesysCannedResponse(token, libraryId, name);
@@ -172,7 +172,7 @@ class GenesysTemplateParse extends OpenAPIRoute {
 			return c.json(result);
 		} catch (e) {
 			// Log error when debug enabled
-			const debugHeader = c.req?.header?.("genesys-debug") ?? c.req?.headers?.get("genesys-debug");
+			const debugHeader = c.req?.header("genesys-debug");
 			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
 			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - error:", (e as Error).message);
 			return c.json({ error: (e as Error).message }, 422);
