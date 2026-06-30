@@ -16,7 +16,8 @@
 	],
   "routes": [
     { "pattern": "gr-tools.interastar.app", "custom_domain": true },
-    { "pattern": "gr-tools.onemsg.app", "custom_domain": true }
+    { "pattern": "gr-tools.msj.one", "custom_domain": true },
+		{ "pattern": "gr-tools.onemsg.app", "custom_domain": true }
   ],
 	/**
 	 * Smart Placement
