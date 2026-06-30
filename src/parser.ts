@@ -1,6 +1,6 @@
 import type { ParseResult } from "./types";
 
-function normalizeStr(s: string): string {
+export function normalizeStr(s: string): string {
 	return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
 }
 
@@ -85,7 +85,7 @@ function decodeHtmlEntities(str: string): string {
 export function buildPattern(template: string): RegExp {
 	// split gives [literal, varname, literal, varname, ..., literal]
 	// Special placeholder: {...} will match any characters (non-greedy) and is NOT captured.
-	const parts = template.split(/\{(\.\.\.|\w+)\}/);
+	const parts = template.split(/\{{1,2}(\.\.\.|\w+)\}{1,2}/);
 	// count only real variables (exclude '...') to determine greediness for the last captured var
 	const varNames = parts
 		.filter((_, idx) => idx % 2 === 1)

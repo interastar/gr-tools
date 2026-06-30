@@ -1,7 +1,7 @@
 import { fromHono, OpenAPIRoute } from "chanfana";
 import { Hono } from "hono";
 import { z } from "zod";
-import { parseTemplate, stripHtml } from "./parser";
+import { normalizeStr, parseTemplate, stripHtml } from "./parser";
 import type { AppContext, Env } from "./types";
 
 const ParseRequestSchema = z.object({
@@ -104,12 +104,17 @@ function parseCandidates(substitutions: GenesysSubstitution[]): Record<string, s
 	const candidates: Record<string, string[]> = {};
 	for (const sub of substitutions) {
 		if (!sub.description) continue;
+		const normalized = normalizeStr(sub.description);
 		try {
-			const parsed: unknown = JSON.parse(sub.description);
-			if (Array.isArray(parsed)) candidates[sub.id] = parsed.map(String);
+			const parsed: unknown = JSON.parse(normalized);
+			if (Array.isArray(parsed)) {
+				candidates[sub.id] = parsed.map(String).filter(Boolean);
+				continue;
+			}
 		} catch {
-			// description is not a JSON array — skip
+			// not JSON — fall through to comma-split
 		}
+		candidates[sub.id] = normalized.split(",").map((v) => v.trim()).filter(Boolean);
 	}
 	return candidates;
 }
