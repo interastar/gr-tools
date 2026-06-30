@@ -16,5 +16,8 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "wrangler": "^4.103.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
   }
 }
