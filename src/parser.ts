@@ -1,5 +1,43 @@
 import type { ParseResult } from "./types";
 
+function normalizeStr(s: string): string {
+	return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
+}
+
+function levenshtein(a: string, b: string): number {
+	const m = a.length, n = b.length;
+	const dp: number[] = Array.from({ length: n + 1 }, (_, i) => i);
+	for (let i = 1; i <= m; i++) {
+		let prev = dp[0]!;
+		dp[0] = i;
+		for (let j = 1; j <= n; j++) {
+			const tmp = dp[j]!;
+			dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j]!, dp[j - 1]!);
+			prev = tmp;
+		}
+	}
+	return dp[n]!;
+}
+
+/**
+ * Returns the best-matching candidate for `value`, or `value` unchanged if no
+ * candidate is within 2 edits (after accent/case normalization).
+ */
+export function fuzzyMatch(value: string, candidates: string[]): string {
+	if (!candidates.length) return value;
+	const normValue = normalizeStr(value);
+	let bestCandidate = value;
+	let bestDist = Infinity;
+	for (const candidate of candidates) {
+		const dist = levenshtein(normValue, normalizeStr(candidate));
+		if (dist < bestDist) {
+			bestDist = dist;
+			bestCandidate = candidate;
+		}
+	}
+	return bestDist <= 2 ? bestCandidate : value;
+}
+
 function escapeRegex(s: string): string {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -81,6 +119,7 @@ export function parseTemplate(
 	template: string,
 	content: string,
 	html = true,
+	candidates: Record<string, string[]> = {},
 ): ParseResult {
 	const text = html ? stripHtml(content) : content;
 	const regex = buildPattern(template);
@@ -92,7 +131,8 @@ export function parseTemplate(
 
 	const result: ParseResult = {};
 	for (const [key, value] of Object.entries(match.groups)) {
-		result[key] = value.trim();
+		const trimmed = value.trim();
+		result[key] = candidates[key]?.length ? fuzzyMatch(trimmed, candidates[key]) : trimmed;
 	}
 	return result;
 }

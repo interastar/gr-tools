@@ -8,6 +8,7 @@ const ParseRequestSchema = z.object({
 	template: z.string().min(1),
 	content: z.string().min(1),
 	html: z.boolean().default(true),
+	candidates: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 class TemplateParse extends OpenAPIRoute {
@@ -45,7 +46,7 @@ class TemplateParse extends OpenAPIRoute {
 
 	async handle(c: AppContext) {
 		const data = await this.getValidatedData<typeof this.schema>();
-		const { template, content, html } = data.body;
+		const { template, content, html, candidates } = data.body;
 
 		// Debug header: Genesys-Debug: true|false (case-insensitive). If missing, debug is off.
 		const debugHeader = c.req?.header("genesys-debug");
@@ -55,8 +56,9 @@ class TemplateParse extends OpenAPIRoute {
 			if (debug) {
 				console.log("[Genesys Debug] TemplateParse - template:", template);
 				console.log("[Genesys Debug] TemplateParse - content:", content);
+				if (candidates) console.log("[Genesys Debug] TemplateParse - candidates:", candidates);
 			}
-			const result = parseTemplate(template, content, html);
+			const result = parseTemplate(template, content, html, candidates);
 			if (debug) console.log("[Genesys Debug] TemplateParse - result:", result);
 			return c.json(result);
 		} catch (e) {
@@ -93,18 +95,38 @@ async function getGenesysToken(clientIdOrAuthHeader: string, clientSecret?: stri
 	return data.access_token;
 }
 
-async function getGenesysCannedResponse(token: string, libraryId: string, name: string): Promise<{ template: string; raw: any }> {
+interface GenesysSubstitution {
+	id: string;
+	description?: string;
+}
+
+function parseCandidates(substitutions: GenesysSubstitution[]): Record<string, string[]> {
+	const candidates: Record<string, string[]> = {};
+	for (const sub of substitutions) {
+		if (!sub.description) continue;
+		try {
+			const parsed: unknown = JSON.parse(sub.description);
+			if (Array.isArray(parsed)) candidates[sub.id] = parsed.map(String);
+		} catch {
+			// description is not a JSON array — skip
+		}
+	}
+	return candidates;
+}
+
+async function getGenesysCannedResponse(token: string, libraryId: string, name: string): Promise<{ template: string; candidates: Record<string, string[]>; raw: any }> {
 	const url = `https://api.mypurecloud.com/api/v2/responsemanagement/responses?libraryId=${libraryId}&pageSize=200`;
 	const res = await fetch(url, {
 		headers: { "Authorization": `Bearer ${token}` },
 	});
 	if (!res.ok) throw new Error(`Genesys API failed: ${res.status}`);
-	const data = await res.json() as { entities: Array<{ name: string; texts: Array<{ content: string }> }> };
+	const data = await res.json() as { entities: Array<{ name: string; texts: Array<{ content: string }>; substitutions?: GenesysSubstitution[] }> };
 	const match = data.entities.find((e) => e.name === name);
 	if (!match) throw new Error(`Canned response not found: "${name}" in library: ${JSON.stringify(data)}`);
 	const rawContent = match.texts?.[0]?.content;
 	if (!rawContent) throw new Error(`Canned response "${name}" has no text content`);
-	return { template: stripHtml(rawContent), raw: data };
+	const candidates = parseCandidates(match.substitutions ?? []);
+	return { template: stripHtml(rawContent), candidates, raw: data };
 }
 
 class GenesysTemplateParse extends OpenAPIRoute {
@@ -160,14 +182,15 @@ class GenesysTemplateParse extends OpenAPIRoute {
 			const debugHeader = c.req?.header("genesys-debug");
 			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
 
-			const { template, raw } = await getGenesysCannedResponse(token, libraryId, name);
+			const { template, candidates, raw } = await getGenesysCannedResponse(token, libraryId, name);
 			if (debug) {
 				console.log("[Genesys Debug] GenesysTemplateParse - request content:", content);
 				console.log("[Genesys Debug] GenesysTemplateParse - genesys raw response:", raw);
 				console.log("[Genesys Debug] GenesysTemplateParse - template to use:", template);
+				console.log("[Genesys Debug] GenesysTemplateParse - candidates:", candidates);
 			}
 
-			const result = parseTemplate(template, content, html);
+			const result = parseTemplate(template, content, html, candidates);
 			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - result:", result);
 			return c.json(result);
 		} catch (e) {
