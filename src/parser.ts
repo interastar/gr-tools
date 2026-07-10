@@ -82,34 +82,90 @@ function decodeHtmlEntities(str: string): string {
 	return str;
 }
 
+const VAR_TOKEN = /^\{{1,2}(\.\.\.|\w+)\}{1,2}/;
+
+/**
+ * Compiles one segment of a template into a regex pattern fragment.
+ * `[...]` marks an optional section (may contain literal text and `{vars}`)
+ * that is wrapped in a non-capturing optional group, so content that omits
+ * it still matches. `insideOptional` tracks whether `]` should close the
+ * current segment (nested) or be treated as a literal character (top level).
+ */
+function compileSegment(
+	template: string,
+	pos: number,
+	varCount: number,
+	varIndexRef: { value: number },
+	insideOptional: boolean,
+): { pattern: string; pos: number } {
+	let pattern = "";
+	let literal = "";
+
+	const flushLiteral = () => {
+		// zero-or-more (not one-or-more): adjacent boundaries around an empty
+		// optional value would otherwise both demand whitespace that only
+		// exists once in the content, causing spurious match failures
+		pattern += escapeRegex(literal).replace(/ +/g, "\\s*");
+		literal = "";
+	};
+
+	while (pos < template.length) {
+		const ch = template[pos];
+		if (ch === "\\" && "[]{}\\".includes(template[pos + 1] ?? "")) {
+			// backslash-escape a literal [ ] { } \ so it isn't treated as template syntax
+			literal += template[pos + 1];
+			pos += 2;
+			continue;
+		}
+		if (ch === "[") {
+			flushLiteral();
+			const inner = compileSegment(template, pos + 1, varCount, varIndexRef, true);
+			pattern += `(?:${inner.pattern})?`;
+			pos = inner.pos;
+			continue;
+		}
+		if (ch === "]" && insideOptional) {
+			flushLiteral();
+			return { pattern, pos: pos + 1 };
+		}
+		if (ch === "{") {
+			const braceMatch = VAR_TOKEN.exec(template.slice(pos));
+			if (braceMatch) {
+				flushLiteral();
+				const name = braceMatch[1]!;
+				if (name === "...") {
+					// match anything (including newlines), non-greedy, do not capture
+					pattern += "(?:[\\s\\S]*?)";
+				} else {
+					const isLast = varIndexRef.value === varCount - 1;
+					// last captured variable is greedy (.*) to avoid under-matching when template ends with a variable
+					// zero-width allowed so a field can be legitimately empty (e.g. "Label: " with no value)
+					pattern += `(?<${name}>${isLast ? ".*" : ".*?"})`;
+					varIndexRef.value++;
+				}
+				pos += braceMatch[0].length;
+				continue;
+			}
+		}
+		literal += ch;
+		pos++;
+	}
+
+	if (insideOptional) throw new Error("Unbalanced '[' in template: missing closing ']'");
+
+	flushLiteral();
+	return { pattern, pos };
+}
+
 export function buildPattern(template: string): RegExp {
-	// split gives [literal, varname, literal, varname, ..., literal]
-	// Special placeholder: {...} will match any characters (non-greedy) and is NOT captured.
-	const parts = template.split(/\{{1,2}(\.\.\.|\w+)\}{1,2}/);
 	// count only real variables (exclude '...') to determine greediness for the last captured var
-	const varNames = parts
+	const varNames = template
+		.split(/\{{1,2}(\.\.\.|\w+)\}{1,2}/)
 		.filter((_, idx) => idx % 2 === 1)
 		.filter((n) => n !== "...");
 	const varCount = varNames.length;
-	let pattern = "";
-	let varIndex = 0;
 
-	for (let i = 0; i < parts.length; i++) {
-		if (i % 2 === 0) {
-			pattern += escapeRegex(parts[i] || "").replace(/ +/g, "\\s+");
-		} else {
-			const name = parts[i];
-			if (name === "...") {
-				// match anything (including newlines), non-greedy, do not capture
-				pattern += "(?:[\\s\\S]*?)";
-			} else {
-				const isLast = varIndex === varCount - 1;
-				// last captured variable is greedy (.+) to avoid under-matching when template ends with a variable
-				pattern += `(?<${name}>${isLast ? ".+" : ".+?"})`;
-				varIndex++;
-			}
-		}
-	}
+	const { pattern } = compileSegment(template, 0, varCount, { value: 0 }, false);
 
 	// allow arbitrary prefix before the template (existing behavior)
 	return new RegExp(`[\\s\\S]*?${pattern}`, "s");
@@ -131,6 +187,11 @@ export function parseTemplate(
 
 	const result: ParseResult = {};
 	for (const [key, value] of Object.entries(match.groups)) {
+		// unmatched optional sections leave their capture group undefined
+		if (value === undefined) {
+			result[key] = "";
+			continue;
+		}
 		const trimmed = value.trim();
 		result[key] = candidates[key]?.length ? fuzzyMatch(trimmed, candidates[key]) : trimmed;
 	}
