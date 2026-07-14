@@ -138,9 +138,17 @@ function compileSegment(
 					pattern += "(?:[\\s\\S]*?)";
 				} else {
 					const isLast = varIndexRef.value === varCount - 1;
-					// last captured variable is greedy (.*) to avoid under-matching when template ends with a variable
-					// zero-width allowed so a field can be legitimately empty (e.g. "Label: " with no value)
-					pattern += `(?<${name}>${isLast ? ".*" : ".*?"})`;
+					// when only a single space separates this var from the next one, two lazy/greedy
+					// `.*` captures in a row have nothing forcing them to split at that space, so the
+					// earlier one matches empty and the later one swallows both values; restricting to
+					// \S* (no spaces) makes this var stop exactly at the separator instead
+					const followedBySpaceThenVar = /^ +\{{1,2}(?!\.\.\.)\w+\}{1,2}/.test(
+						template.slice(pos + braceMatch[0].length),
+					);
+					const varPattern = followedBySpaceThenVar ? "\\S*" : isLast ? ".*" : ".*?";
+					// skip any leading whitespace outside the capture (e.g. the space after "Label: ")
+					// so it doesn't block \S* from reaching the actual value
+					pattern += followedBySpaceThenVar ? `\\s*(?<${name}>${varPattern})` : `(?<${name}>${varPattern})`;
 					varIndexRef.value++;
 				}
 				pos += braceMatch[0].length;
