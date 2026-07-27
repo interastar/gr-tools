@@ -1,8 +1,35 @@
 import { fromHono, OpenAPIRoute } from "chanfana";
 import { Hono } from "hono";
 import { z } from "zod";
-import { normalizeStr, parseTemplate, stripHtml } from "./parser";
+import { extractPdfText, SUSPICIOUSLY_SHORT_CHARS } from "./attachments";
+import { parseWithTemplate } from "./core";
+import type { GenesysAuth } from "./genesys";
+import { parseTemplate } from "./parser";
 import type { AppContext, Env } from "./types";
+
+/** Debug header: `Genesys-Debug: true|false` (case-insensitive). Missing means off. */
+function isDebug(c: AppContext): boolean {
+	const header = c.req?.header("genesys-debug");
+	return typeof header === "string" && header.toLowerCase() === "true";
+}
+
+/** Per-request credentials via `Authorization`, falling back to the configured vars/secrets. */
+function authFrom(c: AppContext): GenesysAuth {
+	return {
+		authHeader: c.req?.header("authorization"),
+		clientId: c.env.GENESYS_CLIENT_ID,
+		clientSecret: c.env.GENESYS_CLIENT_SECRET,
+	};
+}
+
+/** Per-request library via `Genesys-Library-Id`, falling back to the configured var. */
+function libraryFrom(c: AppContext): string {
+	const header = c.req?.header("genesys-library-id");
+	return header && header.trim().length > 0 ? header : c.env.GENESYS_LIBRARY_ID;
+}
+
+const ErrorSchema = z.object({ error: z.string() });
+const ResultSchema = z.record(z.string(), z.string());
 
 const ParseRequestSchema = z.object({
 	template: z.string().min(1),
@@ -16,30 +43,16 @@ class TemplateParse extends OpenAPIRoute {
 		tags: ["Parse"],
 		summary: "Extract data from content using a reverse template",
 		request: {
-			body: {
-				content: {
-					"application/json": {
-						schema: ParseRequestSchema,
-					},
-				},
-			},
+			body: { content: { "application/json": { schema: ParseRequestSchema } } },
 		},
 		responses: {
 			"200": {
 				description: "Key-value pairs extracted from content",
-				content: {
-					"application/json": {
-						schema: z.record(z.string(), z.string()),
-					},
-				},
+				content: { "application/json": { schema: ResultSchema } },
 			},
 			"422": {
 				description: "Content does not match the template",
-				content: {
-					"application/json": {
-						schema: z.object({ error: z.string() }),
-					},
-				},
+				content: { "application/json": { schema: ErrorSchema } },
 			},
 		},
 	};
@@ -47,10 +60,7 @@ class TemplateParse extends OpenAPIRoute {
 	async handle(c: AppContext) {
 		const data = await this.getValidatedData<typeof this.schema>();
 		const { template, content, html, candidates } = data.body;
-
-		// Debug header: Genesys-Debug: true|false (case-insensitive). If missing, debug is off.
-		const debugHeader = c.req?.header("genesys-debug");
-		const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
+		const debug = isDebug(c);
 
 		try {
 			if (debug) {
@@ -74,95 +84,27 @@ const GenesysParseRequestSchema = z.object({
 	html: z.boolean().default(true),
 });
 
-async function getGenesysToken(clientIdOrAuthHeader: string, clientSecret?: string): Promise<string> {
-	// If a client secret is provided, build a Basic auth header from id:secret.
-	// Otherwise treat the first argument as a full Authorization header value
-	// (for example: "Basic <base64>").
-	const authHeader = clientSecret
-		? `Basic ${btoa(`${clientIdOrAuthHeader}:${clientSecret}`)}`
-		: clientIdOrAuthHeader;
-
-	const res = await fetch("https://login.mypurecloud.com/oauth/token", {
-		method: "POST",
-		headers: {
-			"Authorization": authHeader,
-			"Content-Type": "application/x-www-form-urlencoded",
-		},
-		body: "grant_type=client_credentials",
-	});
-	if (!res.ok) throw new Error(`Genesys auth failed: ${res.status}`);
-	const data = await res.json() as { access_token: string };
-	return data.access_token;
-}
-
-interface GenesysSubstitution {
-	id: string;
-	description?: string;
-}
-
-function parseCandidates(substitutions: GenesysSubstitution[]): Record<string, string[]> {
-	const candidates: Record<string, string[]> = {};
-	for (const sub of substitutions) {
-		if (!sub.description) continue;
-		const normalized = normalizeStr(sub.description);
-		try {
-			const parsed: unknown = JSON.parse(normalized);
-			if (Array.isArray(parsed)) {
-				candidates[sub.id] = parsed.map(String).filter(Boolean);
-				continue;
-			}
-		} catch {
-			// not JSON — fall through to comma-split
-		}
-		candidates[sub.id] = normalized.split(",").map((v) => v.trim()).filter(Boolean);
-	}
-	return candidates;
-}
-
-async function getGenesysCannedResponse(token: string, libraryId: string, name: string): Promise<{ template: string; candidates: Record<string, string[]>; raw: any }> {
-	const url = `https://api.mypurecloud.com/api/v2/responsemanagement/responses?libraryId=${libraryId}&pageSize=200`;
-	const res = await fetch(url, {
-		headers: { "Authorization": `Bearer ${token}` },
-	});
-	if (!res.ok) throw new Error(`Genesys API failed: ${res.status}`);
-	const data = await res.json() as { entities: Array<{ name: string; texts: Array<{ content: string }>; substitutions?: GenesysSubstitution[] }> };
-	const match = data.entities.find((e) => e.name === name);
-	if (!match) throw new Error(`Canned response not found: "${name}" in library: ${JSON.stringify(data)}`);
-	const rawContent = match.texts?.[0]?.content;
-	if (!rawContent) throw new Error(`Canned response "${name}" has no text content`);
-	const candidates = parseCandidates(match.substitutions ?? []);
-	return { template: stripHtml(rawContent), candidates, raw: data };
-}
-
+/**
+ * The generic entry point: whatever the content turns out to be, parse it with
+ * the named canned response. A `content` that is a JSON array of attachments is
+ * downloaded and read as a PDF instead of being parsed as text, so a caller
+ * with a single string field — a Genesys Data Action, say — can send either.
+ */
 class GenesysTemplateParse extends OpenAPIRoute {
 	schema = {
 		tags: ["Parse"],
-		summary: "Extract data using a Genesys canned response as template",
+		summary: "Extract data using a Genesys canned response as template, from text or from a PDF attachment",
 		request: {
-			body: {
-				content: {
-					"application/json": {
-						schema: GenesysParseRequestSchema,
-					},
-				},
-			},
+			body: { content: { "application/json": { schema: GenesysParseRequestSchema } } },
 		},
 		responses: {
 			"200": {
 				description: "Key-value pairs extracted from content",
-				content: {
-					"application/json": {
-						schema: z.record(z.string(), z.string()),
-					},
-				},
+				content: { "application/json": { schema: ResultSchema } },
 			},
 			"422": {
-				description: "Content does not match the template or canned response not found",
-				content: {
-					"application/json": {
-						schema: z.object({ error: z.string() }),
-					},
-				},
+				description: "Content does not match the template, canned response not found, or attachment unreadable",
+				content: { "application/json": { schema: ErrorSchema } },
 			},
 		},
 	};
@@ -170,39 +112,130 @@ class GenesysTemplateParse extends OpenAPIRoute {
 	async handle(c: AppContext) {
 		const data = await this.getValidatedData<typeof this.schema>();
 		const { name, content, html } = data.body;
+		const debug = isDebug(c);
 
 		try {
-			const { GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET, GENESYS_LIBRARY_ID } = c.env;
-			// Prefer an Authorization header from the request; fall back to configured secrets.
-			const authHeader = c.req?.header("authorization");
-			const token = authHeader
-				? await getGenesysToken(authHeader)
-				: await getGenesysToken(GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET);
-
-			// Prefer a custom header `Genesys-Library-Id` over the configured var.
-			const libraryHeader = c.req?.header("genesys-library-id");
-			const libraryId = libraryHeader && libraryHeader.trim().length > 0 ? libraryHeader : GENESYS_LIBRARY_ID;
-
-			// Debug header handling
-			const debugHeader = c.req?.header("genesys-debug");
-			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
-
-			const { template, candidates, raw } = await getGenesysCannedResponse(token, libraryId, name);
-			if (debug) {
-				console.log("[Genesys Debug] GenesysTemplateParse - request content:", content);
-				console.log("[Genesys Debug] GenesysTemplateParse - genesys raw response:", raw);
-				console.log("[Genesys Debug] GenesysTemplateParse - template to use:", template);
-				console.log("[Genesys Debug] GenesysTemplateParse - candidates:", candidates);
-			}
-
-			const result = parseTemplate(template, content, html, candidates);
-			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - result:", result);
+			const result = await parseWithTemplate({
+				name,
+				content,
+				auth: authFrom(c),
+				libraryId: libraryFrom(c),
+				html,
+				debug,
+			});
 			return c.json(result);
 		} catch (e) {
-			// Log error when debug enabled
-			const debugHeader = c.req?.header("genesys-debug");
-			const debug = typeof debugHeader === "string" && debugHeader.toLowerCase() === "true";
 			if (debug) console.log("[Genesys Debug] GenesysTemplateParse - error:", (e as Error).message);
+			return c.json({ error: (e as Error).message }, 422);
+		}
+	}
+}
+
+const AttachmentSchema = z.object({
+	url: z.string().url(),
+	mimeType: z.string().optional(),
+	mediaType: z.string().optional(),
+	name: z.string().optional(),
+});
+
+const AttachmentParseRequestSchema = z.object({
+	name: z.string().min(1),
+	attachments: z.array(AttachmentSchema).min(1),
+	html: z.boolean().default(false),
+});
+
+class GenesysAttachmentParse extends OpenAPIRoute {
+	schema = {
+		tags: ["Parse"],
+		summary: "Extract data from a PDF attachment using a Genesys canned response as template",
+		request: {
+			body: { content: { "application/json": { schema: AttachmentParseRequestSchema } } },
+		},
+		responses: {
+			"200": {
+				description: "Key-value pairs extracted from the attachment",
+				content: { "application/json": { schema: ResultSchema } },
+			},
+			"422": {
+				description: "No PDF found, attachment unreadable, or content does not match the template",
+				content: { "application/json": { schema: ErrorSchema } },
+			},
+		},
+	};
+
+	async handle(c: AppContext) {
+		const data = await this.getValidatedData<typeof this.schema>();
+		const { name, attachments, html } = data.body;
+		const debug = isDebug(c);
+
+		try {
+			const result = await parseWithTemplate({
+				name,
+				attachments,
+				auth: authFrom(c),
+				libraryId: libraryFrom(c),
+				html,
+				debug,
+			});
+			return c.json(result);
+		} catch (e) {
+			if (debug) console.log("[Genesys Debug] GenesysAttachmentParse - error:", (e as Error).message);
+			return c.json({ error: (e as Error).message }, 422);
+		}
+	}
+}
+
+const ExtractRequestSchema = z.object({
+	attachments: z.array(AttachmentSchema).min(1),
+});
+
+/**
+ * Preview endpoint. Templates must be written against the text unpdf actually
+ * produces (tables flatten by column, not by row), so whoever authors a canned
+ * response calls this first and writes against the real string.
+ */
+class AttachmentExtract extends OpenAPIRoute {
+	schema = {
+		tags: ["Parse"],
+		summary: "Extract the plain text of a PDF attachment, to author templates against",
+		request: {
+			body: { content: { "application/json": { schema: ExtractRequestSchema } } },
+		},
+		responses: {
+			"200": {
+				description: "Flattened text of the first PDF in the list",
+				content: {
+					"application/json": {
+						schema: z.object({
+							text: z.string(),
+							chars: z.number(),
+							pages: z.number(),
+							source: z.string(),
+							warning: z.string().optional(),
+						}),
+					},
+				},
+			},
+			"422": {
+				description: "No PDF found or the attachment could not be read",
+				content: { "application/json": { schema: ErrorSchema } },
+			},
+		},
+	};
+
+	async handle(c: AppContext) {
+		const data = await this.getValidatedData<typeof this.schema>();
+		const { attachments } = data.body;
+
+		try {
+			const extracted = await extractPdfText(attachments);
+			// A generated PDF yields thousands of characters; a scan yields almost none.
+			const warning = extracted.chars < SUSPICIOUSLY_SHORT_CHARS
+				? `Only ${extracted.chars} characters extracted — the PDF may be a scan and need OCR`
+				: undefined;
+			return c.json({ ...extracted, ...(warning ? { warning } : {}) });
+		} catch (e) {
+			if (isDebug(c)) console.log("[Genesys Debug] AttachmentExtract - error:", (e as Error).message);
 			return c.json({ error: (e as Error).message }, 422);
 		}
 	}
@@ -216,6 +249,8 @@ const openapi = fromHono(app, {
 
 openapi.post("/api/parse", TemplateParse);
 openapi.post("/api/parse/template", GenesysTemplateParse);
+openapi.post("/api/parse/attachment", GenesysAttachmentParse);
+openapi.post("/api/extract", AttachmentExtract);
 
 // 405 fallback for non-POST methods on this route
 app.all("/api/parse", (c) => c.json({ error: "Method Not Allowed" }, 405));

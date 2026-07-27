@@ -1,0 +1,32 @@
+# Runtime configuration of the Genesys Cloud Function.
+#
+# Genesys is configured through its own UI (Admin > Integrations > Functions),
+# not by `serverless deploy`; this file is the single written record of the
+# values to enter there, and lets the same bundle be deployed to a plain AWS
+# account for load testing.
+#
+# Upload artifact: functions/dist/gr-parse-attachment-<version>.zip (`pnpm build:function`)
+
+service: gr-parse-attachment
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  logRetentionInDays: 7
+  versionFunctions: false
+
+package:
+  artifact: dist/gr-parse-attachment.zip
+
+functions:
+  parseAttachment:
+    handler: index.handler
+    name: gr-parse-attachment
+    description: Download a PDF attachment and parse it using a Genesys canned response as template
+    runtime: nodejs20.x
+    memorySize: 1024   # unpdf uses more memory than the plain-text parser
+    timeout: 15        # the Genesys maximum; the parallel fetches in core.ts are what keep it under
+    architecture: arm64
+    tracing: PassThrough
+    environment:
+      LogLevel: DEBUG

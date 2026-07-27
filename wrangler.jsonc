@@ -40,6 +40,7 @@
 		"GENESYS_CLIENT_ID": "b7df372e-70b8-4d29-b169-7b8a9fdc3a81",
 		"GENESYS_LIBRARY_ID": "73333a87-0b93-4acd-920e-f21cb2b23c1b"
 	}
+	// PDF text extraction runs in-process with unpdf — no AI binding needed.
 	// Secrets (set via: wrangler secret put GENESYS_CLIENT_ID / GENESYS_CLIENT_SECRET)
 	/**
 	 * Static Assets
