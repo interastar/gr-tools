@@ -182,14 +182,14 @@ decide cuál es. Se requiere `content` o `attachments`.
 |---|---|---|---|
 | `name` | string | sí | Nombre de la canned response en la librería |
 | `content` | string | uno de los dos | Texto a parsear, **o** el array JSON de adjuntos |
-| `attachments` | array \| string | uno de los dos | Array de adjuntos `{url, mediaType}`, o su representación como JSON string (los Data Actions de Genesys pueden serializar arrays como string) |
+| `attachments` | array \| string | uno de los dos | Array de adjuntos tal como los manda Genesys (`{contentLength, contentType, contentUri, id, name}`), o su representación como JSON string (los Data Actions de Genesys pueden serializar arrays como string) |
 | `html` | string \| boolean | no | `"false"` para no limpiar tags. Se ignora cuando el contenido salió de un PDF |
 
 Las tres formas de mandar el mismo adjunto:
 ```json
-{ "attachments": [{ "url": "https://...", "mediaType": "application/pdf" }] }
-{ "attachments": "[{\"url\":\"https://...\",\"mediaType\":\"application/pdf\"}]" }
-{ "content":     "[{\"url\":\"https://...\",\"mediaType\":\"application/pdf\"}]" }
+{ "attachments": [{ "contentType": "application/pdf", "contentUri": "https://...", "name": "x.pdf" }] }
+{ "attachments": "[{\"contentType\":\"application/pdf\",\"contentUri\":\"https://...\"}]" }
+{ "content":     "[{\"contentType\":\"application/pdf\",\"contentUri\":\"https://...\"}]" }
 ```
 
 La tercera es la que importa: un Data Action con un solo campo de string puede mandar texto o
@@ -288,7 +288,7 @@ Salida: `functions/dist/gr-parse-attachment-<versión>.zip`, ~500 KB, un solo `i
    ```js
    const { handler } = require('./dist/index')
    const result = await handler(
-     { name: 'MiPlantilla', attachments: [{ url: 'file://...', mediaType: 'application/pdf' }] },
+     { name: 'MiPlantilla', attachments: [{ contentType: 'application/pdf', contentUri: 'file://...' }] },
      { clientContext: { authorization: 'Basic <base64>', 'genesys-library-id': '<id>' } }
    )
    console.log(result)

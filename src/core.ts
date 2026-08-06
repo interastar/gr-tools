@@ -42,8 +42,9 @@ const defaultLog = (message: string, value?: unknown) => {
 
 /**
  * Returns the attachment list a string represents, or null if the string is
- * just content. Requires every element to carry a `url`, so a JSON array that
- * happens to be the actual content isn't mistaken for a list of attachments.
+ * just content. Requires every element to carry a `contentUri`, so a JSON
+ * array that happens to be the actual content isn't mistaken for a list of
+ * attachments.
  */
 export function asAttachmentList(content: string): Attachment[] | null {
 	const trimmed = content.trim();
@@ -58,7 +59,7 @@ export function asAttachmentList(content: string): Attachment[] | null {
 
 	if (!Array.isArray(parsed) || parsed.length === 0) return null;
 	const looksLikeAttachments = parsed.every(
-		(item) => item !== null && typeof item === "object" && typeof (item as Attachment).url === "string",
+		(item) => item !== null && typeof item === "object" && typeof (item as Attachment).contentUri === "string",
 	);
 	return looksLikeAttachments ? (parsed as Attachment[]) : null;
 }

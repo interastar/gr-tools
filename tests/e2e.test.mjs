@@ -89,7 +89,7 @@ test("parses a PDF attachment against a canned response", async () => {
 	const res = await handler(
 		{
 			name: "Reporte de siniestro",
-			attachments: [{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }],
+			attachments: [{ contentLength: 45991, contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, id: "19f9b9824f148d185ad3", name: "103967-2026.pdf" }],
 		},
 		{ clientContext },
 	);
@@ -102,7 +102,7 @@ test("accepts attachments serialized as a JSON string, as Data Actions send them
 	const res = await handler(
 		{
 			name: "Reporte de siniestro",
-			attachments: JSON.stringify([{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }]),
+			attachments: JSON.stringify([{ contentLength: 45991, contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, id: "19f9b9824f148d185ad3", name: "103967-2026.pdf" }]),
 		},
 		{ clientContext },
 	);
@@ -116,7 +116,7 @@ test("a content field holding a JSON array of attachments is read as a PDF", asy
 	const res = await handler(
 		{
 			name: "Reporte de siniestro",
-			content: JSON.stringify([{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }]),
+			content: JSON.stringify([{ contentLength: 45991, contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, id: "19f9b9824f148d185ad3", name: "103967-2026.pdf" }]),
 		},
 		{ clientContext },
 	);
@@ -150,7 +150,7 @@ test("the PDF download and the template lookup overlap", async () => {
 	await handler(
 		{
 			name: "Reporte de siniestro",
-			attachments: [{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }],
+			attachments: [{ contentLength: 45991, contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, id: "19f9b9824f148d185ad3", name: "103967-2026.pdf" }],
 		},
 		{ clientContext },
 	);
@@ -164,7 +164,7 @@ test("an unknown canned response comes back as an error, not an exception", asyn
 	const res = await handler(
 		{
 			name: "No existe",
-			attachments: [{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }],
+			attachments: [{ contentLength: 45991, contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, id: "19f9b9824f148d185ad3", name: "103967-2026.pdf" }],
 		},
 		{ clientContext },
 	);
@@ -177,7 +177,7 @@ test("a failed download comes back as an error", async () => {
 	const res = await handler(
 		{
 			name: "Reporte de siniestro",
-			attachments: [{ url: "https://example.invalid/x.pdf", mediaType: "application/pdf" }],
+			attachments: [{ contentType: "application/pdf", contentUri: "https://example.invalid/x.pdf", name: "x.pdf" }],
 		},
 		{ clientContext },
 	);

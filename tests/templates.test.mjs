@@ -31,8 +31,9 @@ before(async () => {
 
 after(() => server.close());
 
-const extract = (file, mimeType = "application/pdf") =>
-	core.extractPdfText([{ url: `${origin}/${file}`, mimeType }]);
+// the Genesys shape: { contentLength, contentType, contentUri, id, name }
+const extract = (file, contentType = "application/pdf") =>
+	core.extractPdfText([{ contentType, contentUri: `${origin}/${file}`, id: "19f9b9824f148d185ad3", name: file }]);
 
 /* ------------------------------------------------------------ extraction */
 
@@ -61,16 +62,37 @@ test("falls back to the file extension when no mime-type is given", async () => 
 
 test("rejects a list with no PDF in it", async () => {
 	await assert.rejects(
-		() => core.extractPdfText([{ url: `${origin}/x.png`, mimeType: "image/png" }]),
+		() => core.extractPdfText([{ contentUri: `${origin}/x.png`, contentType: "image/png", name: "x.png" }]),
 		/No PDF attachment found/,
+	);
+});
+
+test("rejects an attachment Genesys reports as oversize before downloading it", async () => {
+	await assert.rejects(
+		() =>
+			core.extractPdfText([
+				{
+					contentLength: core.MAX_ATTACHMENT_BYTES + 1,
+					contentType: "application/pdf",
+					contentUri: `${origin}/103967-2026.pdf`,
+					name: "103967-2026.pdf",
+				},
+			]),
+		/Attachment too large/,
 	);
 });
 
 /* ------------------------------------------------------ content resolution */
 
 test("a JSON array of attachments is recognised as such", () => {
-	const list = core.asAttachmentList('[{"url":"https://x/y.pdf","mediaType":"application/pdf"}]');
-	assert.deepEqual(list, [{ url: "https://x/y.pdf", mediaType: "application/pdf" }]);
+	const attachment = {
+		contentLength: 45991,
+		contentType: "application/pdf",
+		contentUri: "https://inin-prod-useast1-conversation-services.s3.amazonaws.com/postino/a?X-Amz-Signature=f89",
+		id: "19f9b9824f148d185ad3",
+		name: "103967-2026.pdf",
+	};
+	assert.deepEqual(core.asAttachmentList(JSON.stringify([attachment])), [attachment]);
 });
 
 test("content that is not an attachment list stays content", () => {
@@ -79,15 +101,17 @@ test("content that is not an attachment list stays content", () => {
 		"[esto no es JSON",
 		"[]",
 		'["a", "b"]', // a JSON array, but not of attachments
-		'[{"nombre":"Juan"}]', // objects, but with no url
-		'{"url":"https://x/y.pdf"}', // an object, not an array
+		'[{"nombre":"Juan"}]', // objects, but with no contentUri
+		'{"contentUri":"https://x/y.pdf"}', // an object, not an array
 	]) {
 		assert.equal(core.asAttachmentList(content), null, `should not be an attachment list: ${content}`);
 	}
 });
 
 test("resolveContent downloads when the content is an attachment list", async () => {
-	const list = JSON.stringify([{ url: `${origin}/103967-2026.pdf`, mediaType: "application/pdf" }]);
+	const list = JSON.stringify([
+		{ contentType: "application/pdf", contentUri: `${origin}/103967-2026.pdf`, name: "103967-2026.pdf" },
+	]);
 	const { text, extracted } = await core.resolveContent(list);
 	assert.equal(extracted.source, "103967-2026.pdf");
 	assert.ok(text.startsWith("REPORTE GENERAL DE SINIESTRO"));
@@ -241,6 +265,23 @@ const GS_CASES = [
 		template: "Estatus {estatus} Registro Sistema GS {registro} General de Seguros",
 		expected: { estatus: "PAGADA", registro: "10 de JULIO de 2026" },
 	},
+	{
+		// the block the PDF flattens into one run: the header labels come first and
+		// the values after, with hora and teléfono glued together. `{var:regex}`
+		// says what each value looks like, so no positional guessing is needed
+		template:
+			"Asegurado Póliza Siniestro {asegurado:.+?} {poliza:6-[\\d-]+} {siniestro:6-[\\d\\- ]+?} " +
+			"Ocurrió HoraTeléfono Asegurado {ocurrio:\\d{1,2} de \\w+ de \\d{4}} " +
+			"{hora:\\d{1,2}:\\d{2}}{telefono:\\d{10}} Inciso:",
+		expected: {
+			asegurado: "ANGEL DE JESUS MUNGARAY VERGARA",
+			poliza: "6-781-1504-13",
+			siniestro: "6-741- 1119-2026",
+			ocurrio: "10 de JULIO de 2026",
+			hora: "18:20",
+			telefono: "6648124743",
+		},
+	},
 ];
 
 for (const [i, { template, expected }] of GS_CASES.entries()) {
@@ -256,6 +297,43 @@ test("{...} skips intermediate text so a variable does not eat a paragraph", asy
 		core.parseTemplate("Forma Pago: {forma_pago} Estatus original{...}Agente: {agente} Marca:", text, false),
 		{ forma_pago: "ANUAL", agente: "WILLIS AGENTE DE SEGUROS Y DE FIANZAS 2" },
 	);
+});
+
+/* ------------------------------------------------- templates: {var:regex} */
+
+test("{var:regex} splits values the PDF glued together", () => {
+	assert.deepEqual(core.parseTemplate("Hora {hora:\\d{2}:\\d{2}}{tel:\\d{10}} fin", "Hora 18:206648124743 fin", false), {
+		hora: "18:20",
+		tel: "6648124743",
+	});
+});
+
+test("{var:regex} captures a value with spaces in it", () => {
+	assert.deepEqual(
+		core.parseTemplate("Siniestro {siniestro:6-[\\d\\- ]+?} Ocurrió", "Siniestro 6-741- 1119-2026 Ocurrió", false),
+		{ siniestro: "6-741- 1119-2026" },
+	);
+});
+
+test("{var:regex} mixes with plain vars and optional sections", () => {
+	assert.deepEqual(
+		core.parseTemplate("Póliza {poliza:[\\d-]+} Agente: {agente}[ Oficina: {oficina}] fin", "Póliza 781-1504 Agente: WILLIS fin", false),
+		{ poliza: "781-1504", agente: "WILLIS", oficina: "" },
+	);
+});
+
+test("a {var:regex} that does not match fails like any other template", () => {
+	assert.throws(() => core.parseTemplate("Teléfono {tel:\\d{10}} fin", "Teléfono 664 fin", false), /does not match/);
+});
+
+test("a malformed {var:regex} is reported by name", () => {
+	assert.throws(() => core.buildPattern("Hora {hora:\\d{2}:(} fin"), /Invalid regex for variable "hora"/);
+	assert.throws(() => core.buildPattern("Hora {hora:} fin"), /Empty regex for variable "hora"/);
+	assert.throws(() => core.buildPattern("Hora {hora:\\d+ fin"), /missing closing '}'/);
+});
+
+test("a literal colon after a variable is still a plain variable", () => {
+	assert.deepEqual(core.parseTemplate("Inciso {inciso}: fin", "Inciso 13: fin", false), { inciso: "13" });
 });
 
 test("a template that does not match reports the content it saw", async () => {

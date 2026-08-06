@@ -84,6 +84,69 @@ function decodeHtmlEntities(str: string): string {
 
 const VAR_TOKEN = /^\{{1,2}(\.\.\.|\w+)\}{1,2}/;
 
+interface VarToken {
+	name: string;
+	/** The regex fragment of a `{name:pattern}` token, if it has one. */
+	regex?: string;
+	/** Characters consumed by the whole token, braces included. */
+	length: number;
+}
+
+/**
+ * Reads a `{name}`, `{...}` or `{name:regex}` token at `pos`, or returns null
+ * if there isn't one.
+ *
+ * The regex form is scanned brace-aware rather than with a regex of our own:
+ * the fragment may legitimately contain `}` (`\d{4}`, `[}]`), so the token ends
+ * at the first `}` that is neither part of a quantifier, a character class, nor
+ * escaped.
+ */
+function readVarToken(template: string, pos: number): VarToken | null {
+	const plain = VAR_TOKEN.exec(template.slice(pos));
+	if (plain) return { name: plain[1]!, length: plain[0].length };
+
+	const open = /^\{{1,2}(\w+):/.exec(template.slice(pos));
+	if (!open) return null;
+
+	let i = pos + open[0].length;
+	let depth = 0;
+	let inClass = false;
+	let regex = "";
+	for (; i < template.length; i++) {
+		const ch = template[i]!;
+		if (ch === "\\") {
+			regex += ch + (template[i + 1] ?? "");
+			i++;
+			continue;
+		}
+		if (inClass) {
+			if (ch === "]") inClass = false;
+		} else if (ch === "[") {
+			inClass = true;
+		} else if (ch === "{") {
+			depth++;
+		} else if (ch === "}") {
+			if (depth === 0) break; // closes the token
+			depth--;
+		}
+		regex += ch;
+	}
+	if (i >= template.length) throw new Error(`Unbalanced '{' in template: missing closing '}' after "${open[1]}:"`);
+
+	// a `{{name:...}}` token closes with two braces
+	const doubled = open[0].startsWith("{{") && template[i + 1] === "}";
+	const length = i + (doubled ? 2 : 1) - pos;
+
+	if (!regex) throw new Error(`Empty regex for variable "${open[1]}"`);
+	try {
+		new RegExp(regex);
+	} catch (e) {
+		throw new Error(`Invalid regex for variable "${open[1]}": ${(e as Error).message}`);
+	}
+
+	return { name: open[1]!, regex, length };
+}
+
 /**
  * Compiles one segment of a template into a regex pattern fragment.
  * `[...]` marks an optional section (may contain literal text and `{vars}`)
@@ -129,21 +192,26 @@ function compileSegment(
 			return { pattern, pos: pos + 1 };
 		}
 		if (ch === "{") {
-			const braceMatch = VAR_TOKEN.exec(template.slice(pos));
-			if (braceMatch) {
+			const token = readVarToken(template, pos);
+			if (token) {
 				flushLiteral();
-				const name = braceMatch[1]!;
+				const name = token.name;
 				if (name === "...") {
 					// match anything (including newlines), non-greedy, do not capture
 					pattern += "(?:[\\s\\S]*?)";
+				} else if (token.regex !== undefined) {
+					// an explicit regex says exactly what the value looks like, so none of
+					// the greediness heuristics below apply — it is used verbatim
+					pattern += `(?<${name}>${token.regex})`;
+					varIndexRef.value++;
 				} else {
 					const isLast = varIndexRef.value === varCount - 1;
 					// when only a single space separates this var from the next one, two lazy/greedy
 					// `.*` captures in a row have nothing forcing them to split at that space, so the
 					// earlier one matches empty and the later one swallows both values; restricting to
 					// \S* (no spaces) makes this var stop exactly at the separator instead
-					const followedBySpaceThenVar = /^ +\{{1,2}(?!\.\.\.)\w+\}{1,2}/.test(
-						template.slice(pos + braceMatch[0].length),
+					const followedBySpaceThenVar = /^ +\{{1,2}(?!\.\.\.)\w+[:}]/.test(
+						template.slice(pos + token.length),
 					);
 					const varPattern = followedBySpaceThenVar ? "\\S*" : isLast ? ".*" : ".*?";
 					// skip any leading whitespace outside the capture (e.g. the space after "Label: ")
@@ -151,7 +219,7 @@ function compileSegment(
 					pattern += followedBySpaceThenVar ? `\\s*(?<${name}>${varPattern})` : `(?<${name}>${varPattern})`;
 					varIndexRef.value++;
 				}
-				pos += braceMatch[0].length;
+				pos += token.length;
 				continue;
 			}
 		}
@@ -165,13 +233,26 @@ function compileSegment(
 	return { pattern, pos };
 }
 
+/** Counts the real variables (`{...}` excluded) the template captures. */
+function countVars(template: string): number {
+	let count = 0;
+	for (let pos = 0; pos < template.length; pos++) {
+		if (template[pos] === "\\") {
+			pos++;
+			continue;
+		}
+		if (template[pos] !== "{") continue;
+		const token = readVarToken(template, pos);
+		if (!token) continue;
+		if (token.name !== "...") count++;
+		pos += token.length - 1;
+	}
+	return count;
+}
+
 export function buildPattern(template: string): RegExp {
-	// count only real variables (exclude '...') to determine greediness for the last captured var
-	const varNames = template
-		.split(/\{{1,2}(\.\.\.|\w+)\}{1,2}/)
-		.filter((_, idx) => idx % 2 === 1)
-		.filter((n) => n !== "...");
-	const varCount = varNames.length;
+	// the count determines greediness for the last captured var
+	const varCount = countVars(template);
 
 	const { pattern } = compileSegment(template, 0, varCount, { value: 0 }, false);
 

@@ -131,10 +131,12 @@ class GenesysTemplateParse extends OpenAPIRoute {
 	}
 }
 
+/** The shape Genesys sends: `{ contentLength, contentType, contentUri, id, name }`. */
 const AttachmentSchema = z.object({
-	url: z.string().url(),
-	mimeType: z.string().optional(),
-	mediaType: z.string().optional(),
+	contentUri: z.url(),
+	contentType: z.string().optional(),
+	contentLength: z.number().int().nonnegative().optional(),
+	id: z.string().optional(),
 	name: z.string().optional(),
 });
 

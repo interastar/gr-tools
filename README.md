@@ -59,7 +59,7 @@ Con adjuntos, el mismo campo `content`:
 ```json
 {
   "name": "Reporte de siniestro",
-  "content": "[{\"url\":\"https://...\",\"mediaType\":\"application/pdf\"}]"
+  "content": "[{\"contentLength\":45991,\"contentType\":\"application/pdf\",\"contentUri\":\"https://...\",\"id\":\"19f9b9824f148d185ad3\",\"name\":\"103967-2026.pdf\"}]"
 }
 ```
 
@@ -69,7 +69,7 @@ Con adjuntos, el mismo campo `content`:
 | `content` | `string` | Contenido del que se extraen los valores, o el array JSON de adjuntos |
 | `html` | `boolean` | Si `true` (default), limpia tags HTML y entidades antes de parsear. Se ignora cuando el contenido salió de un PDF: ese texto ya es plano y quitarle tags mancharía cualquier `<` literal |
 
-Un `content` se toma como lista de adjuntos solo si es un array JSON no vacío y **todos** sus elementos son objetos con `url`. Un array JSON que resulta ser el contenido real (`["a","b"]`) se parsea como texto.
+Un `content` se toma como lista de adjuntos solo si es un array JSON no vacío y **todos** sus elementos son objetos con `contentUri`. Un array JSON que resulta ser el contenido real (`["a","b"]`) se parsea como texto.
 
 **Respuesta `200`:**
 ```json
@@ -96,17 +96,25 @@ La forma explícita de lo mismo, para llamadores que ya tienen el array de adjun
 ```json
 {
   "name": "Reporte de siniestro",
-  "attachments": [{ "url": "https://...", "mimeType": "application/pdf" }]
+  "attachments": [
+    {
+      "contentLength": 45991,
+      "contentType": "application/pdf",
+      "contentUri": "https://inin-prod-useast1-conversation-services.s3.amazonaws.com/...",
+      "id": "19f9b9824f148d185ad3",
+      "name": "103967-2026.pdf"
+    }
+  ]
 }
 ```
 
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `name` | `string` | Nombre exacto de la respuesta enlatada en Genesys |
-| `attachments` | `array` | Adjuntos `{url, mimeType?, mediaType?, name?}`; se usa el primer PDF |
+| `attachments` | `array` | Adjuntos tal como los manda Genesys: `{contentLength?, contentType?, contentUri, id?, name?}`; se usa el primer PDF |
 | `html` | `boolean` | Default `false`: el texto extraído ya es texto plano |
 
-Si no hay `mimeType`/`mediaType` se usa la extensión del archivo.
+`contentUri` es el único campo obligatorio. Si no hay `contentType` se usa la extensión de `name` (o de la URL). Si `contentLength` supera el máximo (20 MB) se rechaza sin descargar.
 
 ---
 
@@ -116,7 +124,7 @@ Devuelve el texto plano del PDF, sin plantilla. Es la herramienta de autoría: *
 
 **Body:**
 ```json
-{ "attachments": [{ "url": "https://...", "mimeType": "application/pdf" }] }
+{ "attachments": [{ "contentType": "application/pdf", "contentUri": "https://...", "name": "103967-2026.pdf" }] }
 ```
 
 **Respuesta `200`:**
@@ -165,7 +173,10 @@ Provide these headers when calling `POST /api/parse/template` to use per-request
 You can use a small template language with placeholders in curly braces:
 
 - `{name}` — captures a named variable.
+- `{name:regex}` — captures a named variable that matches exactly that regular expression.
 - `{...}` — matches (and ignores) any text between surrounding parts (non-greedy). This is useful when the canned response contains variable text you don't want to capture.
+- `[ ... ]` — optional section: matches if present, and leaves its variables empty if not.
+- `\{`, `\}`, `\[`, `\]` — a literal brace or bracket.
 
 Example:
 
@@ -195,7 +206,24 @@ texto:     Asegurado Póliza Siniestro ANGEL DE JESUS MUNGARAY VERGARA 6-781-150
 →  {"asegurado":"ANGEL DE JESUS MUNGARAY VERGARA","poliza":"781-1504-13","siniestro":"741- 1119-2026"}
 ```
 
-**3. Usa `{...}` para saltar texto intermedio** en vez de dejar que una variable se coma un párrafo entero.
+**3. Usa `{variable:regex}` cuando los valores vienen pegados o tienen espacios.** Una variable normal se corta en el espacio siguiente, así que no puede separar `18:206648124743` ni capturar `6-741- 1119-2026` completo. Con un regex la variable captura exactamente lo que el regex describe:
+
+```
+texto:     Asegurado Póliza Siniestro ANGEL DE JESUS MUNGARAY VERGARA 6-781-1504-13 6-741- 1119-2026 Ocurrió HoraTeléfono Asegurado 10 de JULIO de 2026 18:206648124743 Inciso:
+
+✓  Asegurado Póliza Siniestro {asegurado:.+?} {poliza:6-[\d-]+} {siniestro:6-[\d\- ]+?} Ocurrió HoraTeléfono Asegurado {ocurrio:\d{1,2} de \w+ de \d{4}} {hora:\d{1,2}:\d{2}}{telefono:\d{10}} Inciso:
+→  {"asegurado":"ANGEL DE JESUS MUNGARAY VERGARA","poliza":"6-781-1504-13","siniestro":"6-741- 1119-2026","ocurrio":"10 de JULIO de 2026","hora":"18:20","telefono":"6648124743"}
+```
+
+El regex es JavaScript estándar y va tal cual entre `:` y `}` — se permiten cuantificadores con llaves (`\d{4}`) y clases (`[\d\- ]`). Notas:
+
+- **Usa cuantificadores perezosos (`+?`, `*?`) cuando siga un literal**, para que la variable pare en él en vez de seguir de largo.
+- Las variables con regex **no** llevan las salvaguardas de las normales (regla 1 no aplica: el regex ya delimita el valor), pero sí siguen la regla 2: se escriben contra el texto extraído.
+- Como el regex delimita el valor, dos variables pueden ir pegadas sin separador: `{hora:\d{1,2}:\d{2}}{telefono:\d{10}}`.
+- Un regex inválido, vacío o sin `}` de cierre falla con un error que nombra la variable.
+- La plantilla que viene de una respuesta enlatada pasa por el limpiador de HTML antes de parsear: evita `<` dentro del regex (se lo come como si abriera un tag) y no dependas de espacios repetidos (se colapsan a uno). Usa `\s+` si necesitas "uno o más espacios".
+
+**4. Usa `{...}` para saltar texto intermedio** en vez de dejar que una variable se coma un párrafo entero.
 
 ```
 ✓  Forma Pago: {forma_pago} Estatus original{...}Agente: {agente} Marca:

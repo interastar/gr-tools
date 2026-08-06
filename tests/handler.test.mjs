@@ -16,7 +16,7 @@ const CTX = {
 		"Genesys-Library-Id": "lib-123",
 	},
 };
-const EVENT = { name: "MiPlantilla", attachments: [{ url: "https://example.com/x.pdf", mediaType: "application/pdf" }] };
+const EVENT = { name: "MiPlantilla", attachments: [{ contentType: "application/pdf", contentUri: "https://example.com/x.pdf", name: "x.pdf" }] };
 
 const call = (event, clientContext) => handler(event, { clientContext });
 
@@ -61,7 +61,7 @@ test("attachments serialized as a JSON string is rejected only when malformed", 
 });
 
 test("attachments serialized as a JSON object is rejected", async () => {
-	const res = await call({ name: "MiPlantilla", attachments: '{"url":"x"}' }, CTX.clientContext);
+	const res = await call({ name: "MiPlantilla", attachments: '{"contentUri":"x"}' }, CTX.clientContext);
 	assert.match(res.error, /must be an array/);
 });
 

@@ -6,12 +6,21 @@ import { extractText } from "unpdf";
  * Genesys Cloud Function produce byte-identical text for the same PDF.
  */
 
+/**
+ * An attachment exactly as Genesys sends it. Only `contentUri` is required:
+ * the rest is metadata Genesys always includes but that a hand-written caller
+ * can omit.
+ */
 export interface Attachment {
-	url: string;
-	/** Worker request shape. */
-	mimeType?: string;
-	/** Genesys Data Action shape. */
-	mediaType?: string;
+	/** Pre-signed download URL. */
+	contentUri: string;
+	/** MIME type, e.g. `application/pdf`. */
+	contentType?: string;
+	/** Size in bytes, as reported by Genesys. */
+	contentLength?: number;
+	/** Genesys attachment id. */
+	id?: string;
+	/** Original file name, e.g. `103967-2026.pdf`. */
 	name?: string;
 }
 
@@ -33,29 +42,25 @@ export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
  */
 export const SUSPICIOUSLY_SHORT_CHARS = 200;
 
-function mimeOf(attachment: Attachment): string | undefined {
-	return attachment.mimeType ?? attachment.mediaType;
-}
-
 function pathOf(attachment: Attachment): string {
 	if (attachment.name) return attachment.name;
+	const uri = attachment.contentUri ?? "";
 	try {
-		return new URL(attachment.url).pathname;
+		return new URL(uri).pathname;
 	} catch {
 		// not an absolute URL — match against the raw string, query string and all
-		return attachment.url;
+		return uri;
 	}
 }
 
 export function isPdf(attachment: Attachment): boolean {
-	const mime = mimeOf(attachment);
-	if (mime) return mime.toLowerCase().includes("pdf");
+	if (attachment.contentType) return attachment.contentType.toLowerCase().includes("pdf");
 	// no mime-type provided: fall back to the file extension, ignoring any query string
 	return pathOf(attachment).toLowerCase().split("?")[0]!.endsWith(".pdf");
 }
 
 export function fileNameOf(attachment: Attachment): string {
-	return attachment.name ?? pathOf(attachment).split("/").pop() ?? "attachment.pdf";
+	return attachment.name || pathOf(attachment).split("?")[0]!.split("/").pop() || "attachment.pdf";
 }
 
 /**
@@ -70,7 +75,16 @@ export async function extractPdfText(attachments: Attachment[]): Promise<Extract
 	const pdf = attachments.find(isPdf);
 	if (!pdf) throw new Error("No PDF attachment found in the provided list");
 
-	const res = await fetch(pdf.url);
+	// the list may come from an unvalidated JSON string, so don't trust the type
+	if (!pdf.contentUri) throw new Error("Attachment has no contentUri to download from");
+
+	// Genesys reports the size up front, so an oversize file is rejected without
+	// downloading it at all.
+	if (typeof pdf.contentLength === "number" && pdf.contentLength > MAX_ATTACHMENT_BYTES) {
+		throw new Error(`Attachment too large: ${pdf.contentLength} bytes (max ${MAX_ATTACHMENT_BYTES})`);
+	}
+
+	const res = await fetch(pdf.contentUri);
 	if (!res.ok) throw new Error(`Failed to download attachment: ${res.status}`);
 	const buffer = await res.arrayBuffer();
 	if (buffer.byteLength === 0) throw new Error("Downloaded attachment is empty");
