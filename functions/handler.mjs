@@ -91,11 +91,11 @@ export const handler = async (event, context) => {
 			debug,
 		});
 
-		return { resultJson: JSON.stringify(result), error: "" };
+		return result;
 	} catch (e) {
 		// Never throw at Genesys: Architect branches on `error` instead of having
 		// to handle a failed data action.
 		console.error("parseAttachment failed:", e);
-		return { resultJson: "", error: e && e.message ? e.message : String(e) };
+		return { error: e && e.message ? e.message : String(e) };
 	}
 };
