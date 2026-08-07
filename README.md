@@ -127,6 +127,11 @@ Devuelve el texto plano del PDF, sin plantilla. Es la herramienta de autoría: *
 { "attachments": [{ "contentType": "application/pdf", "contentUri": "https://...", "name": "103967-2026.pdf" }] }
 ```
 
+`attachments` acepta el array o su representación como string JSON — un Data Action de Genesys con un solo campo de string solo puede mandar lo segundo:
+```json
+{ "attachments": "[{\"contentType\":\"application/pdf\",\"contentUri\":\"https://...\"}]" }
+```
+
 **Respuesta `200`:**
 ```json
 { "text": "REPORTE GENERAL DE SINIESTRO Impreso: ...", "chars": 1375, "pages": 1, "source": "103967-2026.pdf" }

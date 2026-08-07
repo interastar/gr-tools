@@ -1,7 +1,7 @@
 import { fromHono, OpenAPIRoute } from "chanfana";
 import { Hono } from "hono";
 import { z } from "zod";
-import { extractPdfText, SUSPICIOUSLY_SHORT_CHARS } from "./attachments";
+import { type Attachment, extractPdfText, SUSPICIOUSLY_SHORT_CHARS } from "./attachments";
 import { parseWithTemplate } from "./core";
 import type { GenesysAuth } from "./genesys";
 import { parseTemplate } from "./parser";
@@ -140,6 +140,36 @@ const AttachmentSchema = z.object({
 	name: z.string().optional(),
 });
 
+const AttachmentArraySchema = z.array(AttachmentSchema).min(1);
+
+/**
+ * A list of attachments, either as a real array or as its JSON string
+ * representation — a Genesys Data Action with a single string input can only
+ * send the latter.
+ *
+ * The string is validated in `toAttachmentList` rather than by a transform, so
+ * a malformed one is reported for what it is: a union reduces every branch's
+ * issues to a single "Invalid input".
+ */
+const AttachmentListSchema = z.union([AttachmentArraySchema, z.string().min(1)]);
+
+function toAttachmentList(value: z.infer<typeof AttachmentListSchema>): Attachment[] {
+	if (Array.isArray(value)) return value;
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error("attachments is a string but not valid JSON");
+	}
+
+	const result = AttachmentArraySchema.safeParse(parsed);
+	if (!result.success) {
+		throw new Error(`attachments is not a valid attachment array: ${result.error.issues[0]?.message}`);
+	}
+	return result.data;
+}
+
 const AttachmentParseRequestSchema = z.object({
 	name: z.string().min(1),
 	attachments: z.array(AttachmentSchema).min(1),
@@ -188,7 +218,7 @@ class GenesysAttachmentParse extends OpenAPIRoute {
 }
 
 const ExtractRequestSchema = z.object({
-	attachments: z.array(AttachmentSchema).min(1),
+	attachments: AttachmentListSchema,
 });
 
 /**
@@ -230,7 +260,7 @@ class AttachmentExtract extends OpenAPIRoute {
 		const { attachments } = data.body;
 
 		try {
-			const extracted = await extractPdfText(attachments);
+			const extracted = await extractPdfText(toAttachmentList(attachments));
 			// A generated PDF yields thousands of characters; a scan yields almost none.
 			const warning = extracted.chars < SUSPICIOUSLY_SHORT_CHARS
 				? `Only ${extracted.chars} characters extracted — the PDF may be a scan and need OCR`

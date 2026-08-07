@@ -1,4 +1,18 @@
+# Single-package repo, but the file has to declare `packages` anyway: pnpm 10
+# aborts with "packages field missing or empty" when it is absent.
+packages:
+  - .
+
+# Build allowance is spelled differently across pnpm majors, and each version
+# silently ignores the other's key — pnpm 11 (local) reads `allowBuilds`, the
+# pnpm 10 of the Cloudflare build image reads `onlyBuiltDependencies`. Both are
+# listed so the same install works either way.
 allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd
