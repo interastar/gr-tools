@@ -18,12 +18,12 @@ export async function bundleForTest(entry, name) {
 		entryPoints: [join(root, entry)],
 		bundle: true,
 		platform: "node",
-		target: "node20",
+		target: "node22",
 		format: "esm",
 		outfile,
 		resolveExtensions: [".ts", ".js", ".mjs", ".json"],
 		packages: "external",
-		define: { __CODE_VERSION__: JSON.stringify("test") },
+		define: { __CODE_VERSION__: JSON.stringify("test"), __FUNCTION_NAME__: JSON.stringify("test") },
 		logLevel: "silent",
 	});
 	return import(`file://${outfile.replace(/\\/g, "/")}`);

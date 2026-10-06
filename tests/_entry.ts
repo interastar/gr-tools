@@ -4,5 +4,6 @@
 // is why the tests go through the same bundler the deployables do.
 export * from "../src/attachments";
 export * from "../src/core";
+export * from "../src/core-text";
 export * from "../src/genesys";
 export * from "../src/parser";

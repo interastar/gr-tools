@@ -1,5 +1,6 @@
 import { type Attachment, type ExtractedText, extractPdfText, SUSPICIOUSLY_SHORT_CHARS } from "./attachments";
-import { type GenesysAuth, getTemplate } from "./genesys";
+import { assertTemplateSource, defaultLog, logCannedResponse, type TemplateSource } from "./core-text";
+import { getTemplate } from "./genesys";
 import { parseTemplate } from "./parser";
 import type { ParseResult } from "./types";
 
@@ -12,21 +13,18 @@ import type { ParseResult } from "./types";
  * are not always able to tell which — a Genesys Data Action passes everything
  * through a single string input. So a `content` string that turns out to be a
  * JSON array of attachments is treated as one; anything else is text.
+ *
+ * Importing this module bundles unpdf. A caller that only ever has text should
+ * use `parseTextWithTemplate` from `./core-text` instead.
  */
 
-export interface ParseWithTemplateInput {
-	/** Name of the canned response to use as template. */
-	name: string;
+export interface ParseWithTemplateInput extends TemplateSource {
 	/** Plain text, or the JSON representation of an attachment array. */
 	content?: string;
 	/** Attachments as a real array, when the caller already has one. */
 	attachments?: Attachment[];
-	auth: GenesysAuth;
-	libraryId: string;
 	/** Strip HTML before parsing. Defaults to true for text, and is always off for PDF text. */
 	html?: boolean;
-	debug?: boolean;
-	log?: (message: string, value?: unknown) => void;
 }
 
 export interface ResolvedContent {
@@ -34,11 +32,6 @@ export interface ResolvedContent {
 	/** Set when the text came from a PDF rather than from the request itself. */
 	extracted?: ExtractedText;
 }
-
-const defaultLog = (message: string, value?: unknown) => {
-	if (value === undefined) console.log(message);
-	else console.log(message, typeof value === "string" ? value : JSON.stringify(value));
-};
 
 /**
  * Returns the attachment list a string represents, or null if the string is
@@ -97,24 +90,19 @@ export async function parseWithTemplate(input: ParseWithTemplateInput): Promise<
 	const { name, content, attachments, auth, libraryId, html, debug = false } = input;
 	const log = input.log ?? defaultLog;
 
-	if (!name) throw new Error("Missing required input: name");
-	if (!libraryId) throw new Error("Missing required input: libraryId");
+	assertTemplateSource(input);
 
 	if (debug && attachments) log("[Debug] attachments:", attachments);
 
 	// Both round trips run at once. Serialised (token -> responses -> download ->
 	// extract) this can brush against the 15 s ceiling of a Genesys Function on
 	// a cold start.
-	const [resolved, { template, candidates, raw }] = await bothOrFirstError(
+	const [resolved, canned] = await bothOrFirstError(
 		resolveContent(content, attachments),
 		getTemplate(auth, libraryId, name),
 	);
 
-	if (debug) {
-		log("[Debug] genesys raw response:", raw);
-		log("[Debug] template:", template);
-		log("[Debug] candidates:", candidates);
-	}
+	if (debug) logCannedResponse(canned, log);
 
 	if (resolved.extracted) {
 		const { chars, pages, source } = resolved.extracted;
@@ -130,7 +118,7 @@ export async function parseWithTemplate(input: ParseWithTemplateInput): Promise<
 	// angle brackets in it, so HTML handling only applies to caller-sent text.
 	const stripTags = resolved.extracted ? false : (html ?? true);
 
-	const result = parseTemplate(template, resolved.text, stripTags, candidates);
+	const result = parseTemplate(canned.template, resolved.text, stripTags, canned.candidates);
 	if (debug) log("[Debug] result:", result);
 	return result;
 }

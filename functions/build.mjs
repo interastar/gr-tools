@@ -1,27 +1,28 @@
 /**
- * Builds the Genesys Cloud Function bundle.
+ * Builds the Genesys Cloud Function bundles declared in `functions/manifest.mjs`.
  *
- * Everything is bundled into a single CommonJS file — no `node_modules` in the
- * zip — and stamped with a code version so a bundle sitting in the Genesys UI
- * can be traced back to a commit.
+ * Each function is bundled into a single CommonJS file — no `node_modules` in
+ * the zip — and stamped with its name and a code version, so a bundle sitting in
+ * the Genesys UI can be traced back to a commit.
  *
  * Usage:
- *   pnpm build:function                  # version from package.json + git
- *   pnpm build:function --version 1.4.0  # explicit version
+ *   pnpm build:function                              # every function, version from package.json + git
+ *   pnpm build:function --only gr-extract-pdf        # a single function
+ *   pnpm build:function --version 1.4.0              # explicit version
  *
- * Output: functions/dist/index.js and functions/dist/gr-parse-attachment-<version>.zip
+ * Output, per function: functions/dist/<name>/index.js and
+ * functions/dist/<name>-<version>.zip (handler `index.handler`).
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateRawSync } from "node:zlib";
 import { build } from "esbuild";
+import functions, { RUNTIME } from "./manifest.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const outDir = join(root, "functions", "dist");
-const outFile = join(outDir, "index.js");
-const NAME = "gr-parse-attachment";
+export const defaultOutDir = join(root, "functions", "dist");
 
 /* ------------------------------------------------------------------ version */
 
@@ -39,42 +40,13 @@ function git(...args) {
  * suffix means the bundle contains uncommitted changes and should not be
  * published to Genesys as a released version.
  */
-function resolveVersion() {
-	const flagIndex = process.argv.indexOf("--version");
-	if (flagIndex !== -1 && process.argv[flagIndex + 1]) return process.argv[flagIndex + 1];
-
+export function resolveVersion() {
 	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	const sha = git("rev-parse", "--short", "HEAD");
 	if (!sha) return pkg.version;
 	const dirty = git("status", "--porcelain") ? "-dirty" : "";
 	return `${pkg.version}+${sha}${dirty}`;
 }
-
-const version = resolveVersion();
-
-/* -------------------------------------------------------------------- bundle */
-
-mkdirSync(outDir, { recursive: true });
-
-await build({
-	entryPoints: [join(root, "functions", "handler.mjs")],
-	bundle: true,
-	platform: "node",
-	// Genesys Cloud Functions runs nodejs20.x on arm64.
-	target: "node20",
-	format: "cjs",
-	outfile: outFile,
-	// The handler is plain JS but imports the shared TypeScript core directly.
-	resolveExtensions: [".ts", ".js", ".mjs", ".json"],
-	// Nothing external: the zip must be self-contained.
-	external: [],
-	minify: true,
-	legalComments: "none",
-	define: { __CODE_VERSION__: JSON.stringify(version) },
-	banner: { js: `/* ${NAME} ${version} */` },
-});
-
-const bundle = readFileSync(outFile);
 
 /* ----------------------------------------------------------------------- zip */
 
@@ -167,12 +139,93 @@ function makeZip(entries) {
 	return Buffer.concat([...locals, centralDir, eocd]);
 }
 
-// `index.js` at the root of the zip → Genesys handler field is `index.handler`.
-const zipPath = join(outDir, `${NAME}-${version.replace(/[+]/g, "_")}.zip`);
-writeFileSync(zipPath, makeZip([{ name: "index.js", data: bundle }]));
+/* -------------------------------------------------------------------- bundle */
 
-const kb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`;
-console.log(`${NAME} ${version}`);
-console.log(`  bundle  ${outFile} (${kb(bundle.length)})`);
-console.log(`  zip     ${zipPath} (${kb(statSync(zipPath).size)})`);
-console.log(`  handler index.handler`);
+/**
+ * Bundles one manifest entry and zips it. Returns the paths and sizes, and
+ * rejects if a function declared `pdf: false` ends up bundling unpdf.
+ */
+export async function buildFunction(spec, { version, outDir = defaultOutDir }) {
+	const fnDir = join(outDir, spec.name);
+	const outFile = join(fnDir, "index.js");
+	mkdirSync(fnDir, { recursive: true });
+
+	const { metafile } = await build({
+		entryPoints: [join(root, spec.entry)],
+		bundle: true,
+		platform: "node",
+		// The Genesys runtime, from the manifest (nodejs22.x on arm64).
+		target: RUNTIME.target,
+		format: "cjs",
+		outfile: outFile,
+		// The adapters are plain JS but import the shared TypeScript core directly.
+		resolveExtensions: [".ts", ".js", ".mjs", ".json"],
+		// Nothing external: the zip must be self-contained.
+		external: [],
+		minify: true,
+		legalComments: "none",
+		metafile: true,
+		logLevel: "silent",
+		define: {
+			__CODE_VERSION__: JSON.stringify(version),
+			__FUNCTION_NAME__: JSON.stringify(spec.name),
+		},
+		banner: { js: `/* ${spec.name} ${version} */` },
+	});
+
+	const inputs = Object.values(metafile.outputs)[0].inputs;
+	const pdfBytes = Object.entries(inputs)
+		// esbuild reports inputs with forward slashes on every platform
+		.filter(([path]) => /node_modules\/(.+\/)?unpdf[@/]/.test(path))
+		.reduce((sum, [, { bytesInOutput }]) => sum + bytesInOutput, 0);
+	if (!spec.pdf && pdfBytes > 0) {
+		throw new Error(
+			`${spec.name} is declared pdf: false but bundles ${pdfBytes} bytes of unpdf — ` +
+				"import the text-only modules (src/core-text.ts, src/parser.ts, src/genesys.ts), not src/core.ts or src/attachments.ts",
+		);
+	}
+
+	const bundle = readFileSync(outFile);
+	// `index.js` at the root of the zip → Genesys handler field is `index.handler`.
+	const zipPath = join(outDir, `${spec.name}-${version.replace(/[+]/g, "_")}.zip`);
+	const zip = makeZip([{ name: "index.js", data: bundle }]);
+	writeFileSync(zipPath, zip);
+
+	return { spec, outFile, zipPath, bundleBytes: bundle.length, zipBytes: zip.length, pdfBytes };
+}
+
+/* ----------------------------------------------------------------------- cli */
+
+function argValue(flag) {
+	const i = process.argv.indexOf(flag);
+	return i !== -1 ? process.argv[i + 1] : undefined;
+}
+
+async function main() {
+	const version = argValue("--version") || resolveVersion();
+	const only = argValue("--only");
+
+	const selected = only ? functions.filter((f) => f.name === only) : functions;
+	if (selected.length === 0) {
+		throw new Error(`Unknown function "${only}". Known: ${functions.map((f) => f.name).join(", ")}`);
+	}
+
+	const kb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`;
+	console.log(`version ${version}
+`);
+	for (const spec of selected) {
+		const r = await buildFunction(spec, { version });
+		console.log(spec.name);
+		console.log(`  zip      ${r.zipPath} (${kb(r.zipBytes)})`);
+		console.log(`  bundle   ${kb(r.bundleBytes)}${r.pdfBytes ? ` (unpdf ${kb(r.pdfBytes)})` : ""}`);
+		console.log(`  genesys  handler ${RUNTIME.handler} · ${RUNTIME.runtime} ${RUNTIME.architecture} · ${spec.memory} MB · ${spec.timeout} s`);
+		console.log("");
+	}
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	main().catch((e) => {
+		console.error(e.message);
+		process.exit(1);
+	});
+}

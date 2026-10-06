@@ -4,7 +4,7 @@
  *
  * This is the local equivalent of invoking the deployed Lambda — it covers the
  * whole chain (credentials -> parallel fetches -> unpdf -> parseTemplate ->
- * `{ resultJson, error }`) without needing Genesys credentials.
+ * the result as is, or `{ error }`) without needing Genesys credentials.
  */
 import assert from "node:assert/strict";
 import { createReadStream } from "node:fs";
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { bundleForTest, samplesDir } from "./_bundle.mjs";
 
-const { handler } = await bundleForTest("functions/handler.mjs", "handler.e2e.mjs");
+const { handler } = await bundleForTest("functions/parse-attachment.mjs", "handler.e2e.mjs");
 
 const TEMPLATE_HTML =
 	"<p>Asegurado: {asegurado} Cobertura: {cobertura} Estatus inciso: {estatus_inciso} " +
@@ -32,6 +32,7 @@ const GENESYS_RESPONSES = {
 			],
 		},
 		{ name: "Saludo", texts: [{ content: "<p>Hola {nombre}, tu pedido {pedido} está listo.</p>" }] },
+		{ name: "Con error", texts: [{ content: "<p>Estado: {error} fin</p>" }] },
 	],
 };
 
@@ -94,8 +95,7 @@ test("parses a PDF attachment against a canned response", async () => {
 		{ clientContext },
 	);
 
-	assert.equal(res.error, "");
-	assert.deepEqual(JSON.parse(res.resultJson), EXPECTED);
+	assert.deepEqual(res, EXPECTED);
 });
 
 test("accepts attachments serialized as a JSON string, as Data Actions send them", async () => {
@@ -107,8 +107,7 @@ test("accepts attachments serialized as a JSON string, as Data Actions send them
 		{ clientContext },
 	);
 
-	assert.equal(res.error, "");
-	assert.deepEqual(JSON.parse(res.resultJson), EXPECTED);
+	assert.deepEqual(res, EXPECTED);
 });
 
 test("a content field holding a JSON array of attachments is read as a PDF", async () => {
@@ -121,8 +120,7 @@ test("a content field holding a JSON array of attachments is read as a PDF", asy
 		{ clientContext },
 	);
 
-	assert.equal(res.error, "");
-	assert.deepEqual(JSON.parse(res.resultJson), EXPECTED);
+	assert.deepEqual(res, EXPECTED);
 });
 
 test("a content field holding text is parsed as text", async () => {
@@ -131,8 +129,7 @@ test("a content field holding text is parsed as text", async () => {
 		{ clientContext },
 	);
 
-	assert.equal(res.error, "");
-	assert.deepEqual(JSON.parse(res.resultJson), { nombre: "Juan", pedido: "#4521" });
+	assert.deepEqual(res, { nombre: "Juan", pedido: "#4521" });
 });
 
 test("html is honoured for text content and sent as a string", async () => {
@@ -141,8 +138,7 @@ test("html is honoured for text content and sent as a string", async () => {
 		{ clientContext },
 	);
 
-	assert.equal(res.error, "");
-	assert.deepEqual(JSON.parse(res.resultJson), { nombre: "Juan", pedido: "#4521" });
+	assert.deepEqual(res, { nombre: "Juan", pedido: "#4521" });
 });
 
 test("the PDF download and the template lookup overlap", async () => {
@@ -169,7 +165,7 @@ test("an unknown canned response comes back as an error, not an exception", asyn
 		{ clientContext },
 	);
 
-	assert.equal(res.resultJson, "");
+	assert.deepEqual(Object.keys(res), ["error"]);
 	assert.match(res.error, /Canned response not found: "No existe"/);
 });
 
@@ -182,6 +178,12 @@ test("a failed download comes back as an error", async () => {
 		{ clientContext },
 	);
 
-	assert.equal(res.resultJson, "");
+	assert.deepEqual(Object.keys(res), ["error"]);
 	assert.ok(res.error.length > 0);
+});
+
+test("a template variable named error is rejected, so a result is never mistaken for a failure", async () => {
+	const res = await handler({ name: "Con error", content: "Estado: OK fin" }, { clientContext });
+	assert.deepEqual(Object.keys(res), ["error"]);
+	assert.match(res.error, /reserved key "error"/);
 });

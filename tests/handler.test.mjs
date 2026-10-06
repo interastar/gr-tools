@@ -1,13 +1,13 @@
 /**
- * The Genesys adapter's contract: never throw, always answer
- * `{ resultJson, error }`. Only the pre-flight paths are covered here — they
+ * The Genesys adapter's contract: never throw; answer the result as is, or
+ * `{ error }` on failure. Only the pre-flight paths are covered here — they
  * return before any network call, so the suite stays offline.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bundleForTest } from "./_bundle.mjs";
 
-const { handler } = await bundleForTest("functions/handler.mjs", "handler.test.build.mjs");
+const { handler } = await bundleForTest("functions/parse-attachment.mjs", "handler.test.build.mjs");
 
 const CTX = {
 	clientContext: {
@@ -22,7 +22,7 @@ const call = (event, clientContext) => handler(event, { clientContext });
 
 test("missing credentials is an error field, not a thrown exception", async () => {
 	const res = await call(EVENT, { "genesys-library-id": "lib-123" });
-	assert.equal(res.resultJson, "");
+	assert.deepEqual(Object.keys(res), ["error"]);
 	assert.match(res.error, /Missing credentials/);
 });
 
@@ -66,7 +66,14 @@ test("attachments serialized as a JSON object is rejected", async () => {
 });
 
 test("a missing clientContext does not crash the handler", async () => {
-	const res = await handler(EVENT, {});
-	assert.equal(res.resultJson, "");
-	assert.ok(res.error.length > 0);
+	for (const context of [{}, undefined]) {
+		const res = await handler(EVENT, context);
+		assert.deepEqual(Object.keys(res), ["error"]);
+		assert.ok(res.error.length > 0);
+	}
+});
+
+test("a missing event does not crash the handler", async () => {
+	const res = await handler(undefined, CTX);
+	assert.match(res.error, /Missing required input: name/);
 });

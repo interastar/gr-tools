@@ -42,6 +42,23 @@ export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
  */
 export const SUSPICIOUSLY_SHORT_CHARS = 200;
 
+/** The warning to show next to text this short, or undefined if it looks like a real document. */
+export function shortTextWarning(chars: number): string | undefined {
+	return chars < SUSPICIOUSLY_SHORT_CHARS
+		? `Only ${chars} characters extracted — the PDF may be a scan and need OCR`
+		: undefined;
+}
+
+/**
+ * The spec lets a PDF carry junk before its `%PDF-` header, and readers accept
+ * it anywhere in the first 1024 bytes, so that is where it is looked for.
+ */
+function looksLikePdf(bytes: Uint8Array): boolean {
+	// a plain byte scan: TextDecoder labels other than utf-8 are not guaranteed in every runtime
+	const head = String.fromCharCode(...bytes.subarray(0, 1024));
+	return head.includes("%PDF-");
+}
+
 function pathOf(attachment: Attachment): string {
 	if (attachment.name) return attachment.name;
 	const uri = attachment.contentUri ?? "";
@@ -93,7 +110,15 @@ export async function extractPdfText(attachments: Attachment[]): Promise<Extract
 	}
 
 	const source = fileNameOf(pdf);
-	const { text, totalPages } = await extractText(new Uint8Array(buffer), { mergePages: true });
+	const bytes = new Uint8Array(buffer);
+	// A public "share" link often answers with an HTML preview page instead of
+	// the file; say so instead of surfacing a cryptic pdf.js parse error.
+	if (!looksLikePdf(bytes)) {
+		const type = res.headers.get("content-type") || "unknown";
+		throw new Error(`Downloaded file "${source}" is not a PDF (content-type: ${type}) — is the URL a direct download link?`);
+	}
+
+	const { text, totalPages } = await extractText(bytes, { mergePages: true });
 	const flat = flattenWhitespace(text);
 	if (!flat) throw new Error(`Could not extract text from attachment "${source}" (is it a scanned PDF?)`);
 

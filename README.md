@@ -237,47 +237,96 @@ El regex es JavaScript estándar y va tal cual entre `:` y `}` — se permiten c
 
 Los dos PDFs de [`samples/`](samples/) y sus plantillas validadas están cubiertos por [`tests/templates.test.mjs`](tests/templates.test.mjs).
 
-## Genesys Cloud Function
+## Genesys Cloud Functions
 
-`POST /api/parse/template` tiene un equivalente autocontenido que corre como Genesys Cloud Function, para flujos de Architect que no pueden salir a un Worker. Ambos comparten el mismo núcleo ([`src/core.ts`](src/core.ts), [`src/attachments.ts`](src/attachments.ts), [`src/genesys.ts`](src/genesys.ts)) y producen texto idéntico para el mismo PDF; lo único propio de la Function es el adaptador [`functions/handler.mjs`](functions/handler.mjs).
+Las capacidades del Worker tienen equivalentes autocontenidos que corren como Genesys Cloud Functions, para flujos de Architect que no pueden salir a un Worker. No se "convierte" el Worker: ambos son adaptadores delgados sobre el mismo núcleo en `src/`, y producen texto idéntico para el mismo PDF.
 
-**Input Contract:**
+```
+src/parser.ts, src/genesys.ts, src/core-text.ts   texto: sin unpdf (~7 KB)
+src/attachments.ts, src/core.ts                   PDF: arrastran unpdf (~1.6 MB)
+        │
+        ├── src/index.ts                Worker (Hono/chanfana, HTTP)
+        └── functions/<función>.mjs     Genesys Function (event + clientContext)
+              + functions/_runtime.mjs   contrato, headers y coerciones compartidos
+              + functions/manifest.mjs   qué funciones se construyen y su configuración
+```
+
+| Function | Equivale a | Entrada | Credenciales |
+|---|---|---|---|
+| `gr-parse-attachment` | `POST /api/parse/template` | `name`, `content` o `attachments`, `html` | sí |
+| `gr-extract-pdf` | `POST /api/extract` | `source`: URL o JSON de adjuntos | no |
+
+### Contrato común
+
+**Salida:** la función devuelve su objeto de resultado tal cual, o `{ "error": "<mensaje>" }` si falla. Nunca lanza: Architect verifica si existe `error` y ramifica. Por eso **`error` es una llave reservada**: una plantilla con una variable `{error}` se rechaza con un error que pide renombrarla.
+
+**Headers** (`clientContext` del Data Action, sin importar mayúsculas): `authorization: Basic <base64(clientId:clientSecret)>` — o `x-genesysclientid` + `x-genesysclientsecret` por separado — más `genesys-library-id`, y opcionalmente `genesys-debug: true`. Solo las funciones que consultan la API de Genesys los exigen.
+
+Los Data Actions tipan todo como string, así que los booleanos aceptan `"true"`/`"false"` y los arrays su representación JSON.
+
+### `gr-parse-attachment`
 
 | Campo | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `name` | string | sí | Nombre de la respuesta enlatada |
 | `content` | string | uno de los dos | Texto a parsear, o el array JSON de adjuntos |
 | `attachments` | array \| string | uno de los dos | Adjuntos como array o como string JSON |
-| `html` | string \| boolean | no | `"false"` para no limpiar tags. Los Data Actions tipan todo como string, así que se acepta cualquiera de los dos |
+| `html` | string \| boolean | no | `"false"` para no limpiar tags. Se ignora cuando el contenido salió de un PDF |
 
-**Output Contract:** `{ resultJson: string, error: string }`. La función nunca lanza: Architect verifica `error === ""` y luego hace `JSON.parse(resultJson)`.
+Salida: las variables de la plantilla, p. ej. `{ "asegurado": "...", "poliza": "..." }`.
 
-**Credenciales** (Headers del Data Action): `authorization: Basic <base64(clientId:clientSecret)>` — o `x-genesysclientid` + `x-genesysclientsecret` por separado — más `genesys-library-id`, y opcionalmente `genesys-debug: true`.
+### `gr-extract-pdf`
 
-Detalles de diseño y del despliegue en Genesys: [`docs/genesys-functions-plan.md`](docs/genesys-functions-plan.md).
+Herramienta de autoría: devuelve el texto exacto contra el que se escribe la plantilla (ver [Reglas de autoría](#reglas-de-autoría-de-plantillas)). El mismo Data Action sirve a una persona desde la pestaña **Test** en Genesys, sin código, y a Architect con los adjuntos de una conversación de correo.
 
-### Generar la versión de código
+| Campo | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `source` | string \| array | sí | Una URL pública `http(s)` de **descarga directa** del PDF, **o** el array JSON de adjuntos tal como lo manda Genesys (se usa el primer PDF) |
 
-```bash
-pnpm build:function                  # versión desde package.json + git
-pnpm build:function --version 1.4.0  # versión explícita
+`source` se interpreta igual que `content` en `gr-parse-attachment`: si es un array JSON no vacío cuyos elementos tienen todos `contentUri`, es una lista de adjuntos; si no, se toma como URL.
+
+```json
+{ "source": "https://ejemplo.com/reporte.pdf" }
+{ "source": "[{\"contentType\":\"application/pdf\",\"contentUri\":\"https://...\",\"name\":\"103967-2026.pdf\"}]" }
 ```
 
-Produce `functions/dist/gr-parse-attachment-<versión>.zip` (~500 KB, un solo `index.js`, sin `node_modules`), que es lo que se sube en Genesys. La versión sale de `package.json` más el commit corto — `1.0.0+a201d8f` — y queda estampada en el bundle: se registra en el log de cada cold start y se emite en los logs de debug, así se puede rastrear qué bundle está respondiendo. Un sufijo `-dirty` indica que el bundle se armó con cambios sin commitear y no debería publicarse.
+Salida: `{ "text": "...", "chars": 1375, "pages": 1, "source": "103967-2026.pdf", "warning": "" }`. En la salida, `source` es el nombre del archivo del que salió el texto. `warning` siempre viene (vacío si todo bien) y avisa cuando el texto sale tan corto que el PDF parece un escaneo. Un link de "compartir" que responde con una página HTML en vez del archivo se reporta como `... is not a PDF (content-type: text/html ...) — is the URL a direct download link?`.
 
-| Campo en Genesys | Valor |
-|---|---|
-| Handler | `index.handler` |
-| Runtime | `nodejs20.x` (arm64) |
-| Timeout | 15 s |
-| Memory | 1024 MB |
+### Generar los zips
 
-El resto de la configuración de runtime está en [`functions/serverless.yml`](functions/serverless.yml).
+```bash
+pnpm build:function                            # todas las funciones, versión desde package.json + git
+pnpm build:function --only gr-extract-pdf      # una sola
+pnpm build:function --version 1.4.0            # versión explícita
+```
+
+Por cada función produce `functions/dist/<nombre>-<versión>.zip` (~500 KB con unpdf, un solo `index.js`, sin `node_modules`), que es lo que se sube en Genesys, e imprime los valores a capturar en su UI:
+
+```
+gr-extract-pdf
+  zip      functions/dist/gr-extract-pdf-1.0.0_a8c7abb.zip (493 KB)
+  bundle   1592 KB (unpdf 1588 KB)
+  genesys  handler index.handler · nodejs22.x arm64 · 1024 MB · 15 s
+```
+
+La versión sale de `package.json` más el commit corto — `1.0.0+a201d8f` — y queda estampada en el bundle junto con el nombre de la función: se registra en el log de cada cold start y en los logs de debug. Un sufijo `-dirty` indica cambios sin commitear y no debería publicarse. El zip es determinista: el mismo commit produce el mismo archivo byte por byte.
+
+La configuración de cada función (memoria, timeout, descripción) vive en [`functions/manifest.mjs`](functions/manifest.mjs); Genesys se configura por su propia UI, así que no hay archivo de despliegue.
+
+### Agregar una capacidad nueva
+
+1. **La lógica** en `src/`, sin dependencias de Hono ni de Lambda. Si no lee PDFs, que no importe `src/core.ts` ni `src/attachments.ts` (usa `src/core-text.ts`).
+2. **La ruta del Worker** en [`src/index.ts`](src/index.ts), si aplica.
+3. **El adaptador** en `functions/<nombre>.mjs`: `export const handler = defineFunction(async (event, { headers, debug }) => …)`. Valida sus entradas y llama a `src/`; el contrato, los headers y el manejo de errores ya vienen de [`functions/_runtime.mjs`](functions/_runtime.mjs).
+4. **La entrada** en [`functions/manifest.mjs`](functions/manifest.mjs). Con `pdf: false` el build falla si la función termina arrastrando unpdf.
+5. **Tests** del comportamiento propio. El de build ([`tests/build.test.mjs`](tests/build.test.mjs)) ya cubre automáticamente que cada función del manifiesto construya, cargue y respete el contrato.
+
+Detalles de diseño y del despliegue en Genesys: [`docs/genesys-functions-plan.md`](docs/genesys-functions-plan.md).
 
 ## Pruebas
 
 ```bash
-pnpm test        # node --test: extracción, plantillas y contrato de la Function
+pnpm test        # node --test: extracción, plantillas, Worker, Functions y build de cada zip
 pnpm typecheck   # tsc --noEmit
 ```
 

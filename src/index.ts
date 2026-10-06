@@ -1,7 +1,7 @@
 import { fromHono, OpenAPIRoute } from "chanfana";
 import { Hono } from "hono";
 import { z } from "zod";
-import { type Attachment, extractPdfText, SUSPICIOUSLY_SHORT_CHARS } from "./attachments";
+import { type Attachment, extractPdfText, shortTextWarning } from "./attachments";
 import { parseWithTemplate } from "./core";
 import type { GenesysAuth } from "./genesys";
 import { parseTemplate } from "./parser";
@@ -262,9 +262,7 @@ class AttachmentExtract extends OpenAPIRoute {
 		try {
 			const extracted = await extractPdfText(toAttachmentList(attachments));
 			// A generated PDF yields thousands of characters; a scan yields almost none.
-			const warning = extracted.chars < SUSPICIOUSLY_SHORT_CHARS
-				? `Only ${extracted.chars} characters extracted — the PDF may be a scan and need OCR`
-				: undefined;
+			const warning = shortTextWarning(extracted.chars);
 			return c.json({ ...extracted, ...(warning ? { warning } : {}) });
 		} catch (e) {
 			if (isDebug(c)) console.log("[Genesys Debug] AttachmentExtract - error:", (e as Error).message);

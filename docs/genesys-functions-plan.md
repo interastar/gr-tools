@@ -1,11 +1,15 @@
 # Versión standalone para Genesys Cloud Functions
 
-> Estado: **Fases 0–4 implementadas.** Falta el único paso que no se puede hacer desde el repo:
-> subir el zip a Genesys y crear el Function Data Action (ver [Pendiente](#pendiente)).
+> Estado: **Fases 0–4 implementadas**, más una segunda etapa (manifiesto de funciones, runtime
+> común y `gr-extract-pdf`) descrita en [Etapa 2](#etapa-2--varias-functions-desde-un-manifiesto).
+> Falta lo que no se puede hacer desde el repo: subir los zips a Genesys y crear los Function Data
+> Actions (ver [Pendiente](#pendiente)).
 >
 > Lo entregado y lo que se desvió del plan está al final, en
 > [Resultado de la implementación](#resultado-de-la-implementación). El cuerpo del documento se
-> conserva como registro de las decisiones de diseño.
+> conserva como registro de las decisiones de diseño. **El contrato de salida cambió** después
+> de la Fase 4 (ver [Etapa 2](#etapa-2--varias-functions-desde-un-manifiesto)): las secciones que
+> mencionan `{ resultJson, error }` describen el diseño original, no el vigente.
 
 ## Contexto
 
@@ -22,7 +26,7 @@ son solo la capa HTTP que Lambda no necesita.
 | Restricción | Valor | Implicación |
 |---|---|---|
 | Handler | `exports.handler = async (event, context, callback)` | Sin HTTP → hono/chanfana sobran |
-| Runtime | Node.js (`nodejs20.x`), arm64 | Fija la versión de unpdf |
+| Runtime | Node.js (`nodejs20.x`, hoy `nodejs22.x` — ver [Pendiente](#pendiente)), arm64 | Fija la versión de unpdf |
 | Timeout | **1–15 s** | Crítico: hay que paralelizar la red |
 | ZIP | 256 MB | Tamaño del bundle irrelevante |
 | Respuesta | 2 MB | Suficiente |
@@ -81,6 +85,7 @@ Asegurado Póliza Siniestro {asegurado} 6-{poliza} 6-{siniestro} Ocurrió
 - **Plantilla:** se sigue consultando la API de Genesys (hay límite de tamaño del cuerpo).
 - **Autoría:** endpoint de preview.
 - **Salida de la Function:** objeto JSON con `resultJson` (string) y `error` (string).
+  *Reemplazado en `a8c7abb`: el objeto de resultado tal cual, o `{ error }`.*
 
 ---
 
@@ -195,7 +200,7 @@ Las tres formas de mandar el mismo adjunto:
 La tercera es la que importa: un Data Action con un solo campo de string puede mandar texto o
 adjuntos por el mismo input, sin necesitar dos acciones distintas. Un `content` se toma como
 lista de adjuntos solo si es un array JSON no vacío y **todos** sus elementos son objetos con
-`url`; si no, es texto.
+`contentUri`; si no, es texto.
 
 Los Data Actions tipan todo como string, así que `html` acepta `"true"`/`"false"` además del
 booleano.
@@ -219,6 +224,10 @@ Se requiere **una de las dos formas** de credencial:
 - Forma B: `x-genesysclientid` + `x-genesysclientsecret` por separado — compatibilidad con el esquema original del plan
 
 ### Contrato de salida
+
+> **Vigente desde `a8c7abb`:** la función devuelve el objeto de resultado tal cual
+> (`{ "asegurado": "...", "poliza": "..." }`) o `{ "error": "<mensaje>" }`, y `error` es una
+> llave reservada para las variables de plantilla. Lo que sigue es el diseño original.
 
 La función **nunca lanza excepciones hacia Genesys**. Los errores se capturan y se devuelven en
 el campo `error` para que Architect pueda ramificar sin manejar un fallo de acción.
@@ -400,8 +409,73 @@ tests/
 ### Pendiente
 
 - Subir `functions/dist/gr-parse-attachment-<versión>.zip` a Genesys, crear el Function Data Action
-  con el Output Contract `{ resultJson: string, error: string }` y probarlo desde la UI de Test y
-  Flow Playback.
-- **Confirmar en la UI de Genesys qué runtimes de Node hay.** Todo está fijado a Node 20 —
-  `unpdf@1.7.0` (la 1.8.0 declara `engines: node >=22`) y `target: node20` en esbuild. Si Genesys
-  ya ofrece Node 22, se puede subir unpdf.
+  con un Output Contract que declare las variables de la plantilla más `error`, y probarlo desde la
+  UI de Test y Flow Playback.
+- Subir `functions/dist/gr-extract-pdf-<versión>.zip` y crear su Data Action: Input Contract
+  `{ source: string }`, Output Contract `{ text: string, chars: integer, pages: integer, source: string,
+  warning: string, error: string }`. Sin credenciales.
+- **Runtime: resuelto.** Genesys marcó `nodejs20.x` como deprecado y pide `nodejs22.x`; el
+  manifiesto y el `target` de esbuild ya están en Node 22. `unpdf` sigue fijado en `1.7.0`, que
+  corre igual en Node 22. Subir a `1.8.0+` ya es posible, pero es un cambio aparte: puede cambiar
+  el texto extraído y con él las plantillas, así que hay que hacerlo con los tests de
+  `samples/` como red.
+
+---
+
+## Etapa 2 — Varias Functions desde un manifiesto
+
+Validación hecha antes de empezar, contra `a8c7abb`:
+
+| Hallazgo | Estado |
+|---|---|
+| `a8c7abb` cambió la salida a objeto crudo / `{ error }`, pero tests y documentación seguían en `{ resultJson, error }` | confirmado: 9 de 49 tests fallando (7 en `e2e`, 2 en `handler`) |
+| `serverless.yml` declaraba `dist/gr-parse-attachment.zip`; el build genera `<nombre>-<versión>.zip` | confirmado |
+| `build.mjs` con nombre, entrada y zip fijos | confirmado |
+| todo lo que importa `core.ts` arrastra unpdf | confirmado: 1,626 KB de 1,636 KB del bundle; una función solo de texto pesa ~7 KB |
+
+### Decisiones
+
+- **Contrato de salida:** se queda el de `a8c7abb` (objeto crudo, o `{ error }`). `error` pasa a
+  ser llave reservada: si una plantilla captura `{error}`, la función responde con un error que
+  pide renombrar la variable, para que un resultado nunca se confunda con un fallo.
+- **`serverless.yml` eliminado:** Genesys no lo usa (se configura por su UI). La memoria, el
+  timeout y la descripción de cada función viven en `functions/manifest.mjs`, y el build los
+  imprime junto a cada zip.
+
+### Lo que quedó
+
+```
+src/
+  core-text.ts         NUEVO   parseTextWithTemplate() y helpers; no importa attachments → sin unpdf
+  core.ts              usa core-text; contrato y comportamiento sin cambios
+  attachments.ts       + verificación de firma %PDF- y shortTextWarning()
+functions/
+  manifest.mjs         NUEVO   lista de funciones: nombre, entrada, pdf, memoria, timeout
+  _runtime.mjs         NUEVO   defineFunction(): headers, coerciones, contrato, llave reservada
+  parse-attachment.mjs (antes handler.mjs) adaptador de ~25 líneas
+  extract-pdf.mjs      NUEVO   gr-extract-pdf: source (URL o JSON de adjuntos) → { text, chars, pages, source, warning }
+  build.mjs            recorre el manifiesto; --only, --version; guarda de unpdf
+tests/
+  build.test.mjs       NUEVO   cada función del manifiesto construye, carga y respeta el contrato
+  extract.test.mjs     NUEVO   gr-extract-pdf contra los PDFs de samples/
+```
+
+`gr-extract-pdf` recibe un solo campo `source` que puede ser una URL pública o el array JSON de
+adjuntos de una conversación de correo (la misma detección que `content` en `gr-parse-attachment`):
+un Data Action con un solo string sirve tanto para quien prueba desde la pestaña Test como para
+Architect.
+
+Cada función se publica como su propio zip (`functions/dist/<nombre>-<versión>.zip`, handler
+`index.handler`), así que una función de solo texto no carga unpdf. Una entrada con `pdf: false`
+hace fallar el build si la función termina importando `core.ts` o `attachments.ts`.
+
+**Firma `%PDF-`:** un link público de "compartir" suele responder con una página HTML de vista
+previa en lugar del archivo. Antes eso salía como un error críptico de pdf.js; ahora la descarga
+se valida y el error dice que el archivo no es un PDF y muestra su `content-type`. Aplica también
+a `gr-parse-attachment` y al Worker: solo cambia el mensaje de un caso que ya era error.
+
+### Verificación ejecutada
+
+- `pnpm test`: **67 de 67** en verde (antes 40 de 49).
+- `tsc --noEmit` limpio; `wrangler deploy --dry-run`: 3,095 KiB / 695 KiB gzip (antes 3,090 / 694).
+- `pnpm build:function` genera los dos zips (~495 KB cada uno).
