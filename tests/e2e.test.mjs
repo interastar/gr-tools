@@ -123,6 +123,12 @@ test("a content field holding a JSON array of attachments is read as a PDF", asy
 	assert.deepEqual(res, EXPECTED);
 });
 
+test("a content field holding a PDF URL is read as a PDF", async () => {
+	// lets a person try a template from the Data Action's Test tab with just a link
+	const res = await handler({ name: "Reporte de siniestro", content: `${origin}/103967-2026.pdf` }, { clientContext });
+	assert.deepEqual(res, EXPECTED);
+});
+
 test("a content field holding text is parsed as text", async () => {
 	const res = await handler(
 		{ name: "Saludo", content: "<p>Hola Juan, tu pedido #4521 está listo.</p>" },

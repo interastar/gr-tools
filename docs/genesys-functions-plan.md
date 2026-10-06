@@ -465,6 +465,12 @@ adjuntos de una conversación de correo (la misma detección que `content` en `g
 un Data Action con un solo string sirve tanto para quien prueba desde la pestaña Test como para
 Architect.
 
+`content` en `gr-parse-attachment` (y en `POST /api/parse/template`) acepta además un URL de PDF:
+si todo el `content` es un único URL `http(s)`, se descarga como PDF. La detección (`asPdfUrl`
+en `src/core.ts`) es la misma que usa `source` en `gr-extract-pdf`, así que una plantilla se
+prueba desde la pestaña Test con el mismo link con el que se extrajo el texto. Un texto que solo
+*contiene* un link sigue siendo texto.
+
 Cada función se publica como su propio zip (`functions/dist/<nombre>-<versión>.zip`, handler
 `index.handler`), así que una función de solo texto no carga unpdf. Una entrada con `pdf: false`
 hace fallar el build si la función termina importando `core.ts` o `attachments.ts`.
@@ -476,6 +482,6 @@ a `gr-parse-attachment` y al Worker: solo cambia el mensaje de un caso que ya er
 
 ### Verificación ejecutada
 
-- `pnpm test`: **67 de 67** en verde (antes 40 de 49).
+- `pnpm test`: **70 de 70** en verde (antes 40 de 49).
 - `tsc --noEmit` limpio; `wrangler deploy --dry-run`: 3,095 KiB / 695 KiB gzip (antes 3,090 / 694).
 - `pnpm build:function` genera los dos zips (~495 KB cada uno).

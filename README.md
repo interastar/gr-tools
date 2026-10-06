@@ -44,7 +44,7 @@ Extrae variables de un texto usando una plantilla inversa con marcadores `{varia
 
 Igual que `/api/parse` pero en lugar de recibir la plantilla en el body, la obtiene por nombre desde la biblioteca de respuestas enlatadas de Genesys Cloud. El contenido HTML de la respuesta enlatada se sanitiza automáticamente antes de usarse como plantilla.
 
-Es el endpoint genérico: **si `content` es un array JSON de adjuntos, se trata como tal** — se descarga el primer PDF y se parsea su texto. Esto permite que un llamador con un solo campo de string (un Data Action de Genesys, por ejemplo) mande cualquiera de las dos cosas.
+Es el endpoint genérico: **si `content` es un array JSON de adjuntos o un URL de un PDF, se trata como tal** — se descarga el PDF y se parsea su texto. Esto permite que un llamador con un solo campo de string (un Data Action de Genesys, por ejemplo) mande cualquiera de las dos cosas.
 
 **Body:**
 ```json
@@ -66,10 +66,12 @@ Con adjuntos, el mismo campo `content`:
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `name` | `string` | Nombre exacto de la respuesta enlatada en Genesys |
-| `content` | `string` | Contenido del que se extraen los valores, o el array JSON de adjuntos |
+| `content` | `string` | Contenido del que se extraen los valores, el array JSON de adjuntos, o el URL de un PDF |
 | `html` | `boolean` | Si `true` (default), limpia tags HTML y entidades antes de parsear. Se ignora cuando el contenido salió de un PDF: ese texto ya es plano y quitarle tags mancharía cualquier `<` literal |
 
 Un `content` se toma como lista de adjuntos solo si es un array JSON no vacío y **todos** sus elementos son objetos con `contentUri`. Un array JSON que resulta ser el contenido real (`["a","b"]`) se parsea como texto.
+
+Un `content` se toma como URL de un PDF solo si **todo** el texto (sin espacios al inicio o al final) es un único URL `http(s)`. Un texto que solo contiene un link (`Ver https://...`) sigue siendo texto. El URL debe ser de descarga directa: si responde con algo que no es un PDF, la llamada falla con `... is not a PDF`.
 
 **Respuesta `200`:**
 ```json
@@ -269,9 +271,11 @@ Los Data Actions tipan todo como string, así que los booleanos aceptan `"true"`
 | Campo | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `name` | string | sí | Nombre de la respuesta enlatada |
-| `content` | string | uno de los dos | Texto a parsear, o el array JSON de adjuntos |
+| `content` | string | uno de los dos | Texto a parsear, el array JSON de adjuntos, o el URL de un PDF |
 | `attachments` | array \| string | uno de los dos | Adjuntos como array o como string JSON |
 | `html` | string \| boolean | no | `"false"` para no limpiar tags. Se ignora cuando el contenido salió de un PDF |
+
+`content` se interpreta igual que en `POST /api/parse/template`. Con un URL se puede probar una plantilla desde la pestaña **Test** del Data Action pegando solo el link del PDF, igual que con `gr-extract-pdf`.
 
 Salida: las variables de la plantilla, p. ej. `{ "asegurado": "...", "poliza": "..." }`.
 
@@ -283,7 +287,7 @@ Herramienta de autoría: devuelve el texto exacto contra el que se escribe la pl
 |---|---|---|---|
 | `source` | string \| array | sí | Una URL pública `http(s)` de **descarga directa** del PDF, **o** el array JSON de adjuntos tal como lo manda Genesys (se usa el primer PDF) |
 
-`source` se interpreta igual que `content` en `gr-parse-attachment`: si es un array JSON no vacío cuyos elementos tienen todos `contentUri`, es una lista de adjuntos; si no, se toma como URL.
+`source` usa la misma detección que `content` en `gr-parse-attachment`: si es un array JSON no vacío cuyos elementos tienen todos `contentUri`, es una lista de adjuntos; si es un único URL `http(s)`, es el PDF a descargar. Cualquier otra cosa es un error (aquí no hay texto que parsear).
 
 ```json
 { "source": "https://ejemplo.com/reporte.pdf" }

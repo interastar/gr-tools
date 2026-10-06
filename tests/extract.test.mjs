@@ -85,7 +85,8 @@ test("rejects a missing, malformed or non-http source", async () => {
 	for (const [source, message] of [
 		[undefined, /Missing required input: source/],
 		["   ", /Missing required input: source/],
-		["no es un url", /neither a URL nor an attachment array/],
+		["no es un url", /neither an http\(s\) URL nor an attachment array/],
+		["https://ejemplo.com/a b.pdf", /neither an http\(s\) URL nor an attachment array/],
 		["file:///etc/passwd", /must be http\(s\)/],
 		["[not json", /looks like JSON but is not an attachment array/],
 		['[{"name":"x.pdf"}]', /looks like JSON but is not an attachment array/],

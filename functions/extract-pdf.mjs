@@ -14,7 +14,7 @@
  * Needs no Genesys credentials: it never calls the Genesys API.
  */
 import { extractPdfText, shortTextWarning } from "../src/attachments";
-import { asAttachmentList } from "../src/core";
+import { asAttachmentList, asPdfUrl } from "../src/core";
 import { defineFunction } from "./_runtime.mjs";
 
 /** The attachment list `source` stands for: the array itself, its JSON, or a single URL. */
@@ -30,16 +30,13 @@ function toAttachments(source) {
 		throw new Error("Input source looks like JSON but is not an attachment array: each item needs a contentUri");
 	}
 
-	let protocol;
-	try {
-		protocol = new URL(value).protocol;
-	} catch {
-		throw new Error(`Input source is neither a URL nor an attachment array: "${value}"`);
+	// same detection as `content` in gr-parse-attachment, so both accept the same URLs
+	const url = asPdfUrl(value);
+	if (url) return url;
+	if (/^[a-z][a-z\d+.-]*:\/\//i.test(value) && !/^https?:/i.test(value)) {
+		throw new Error("Input source URL must be http(s)");
 	}
-	if (protocol !== "https:" && protocol !== "http:") throw new Error("Input source URL must be http(s)");
-
-	// the caller says it is a PDF, so a URL without a .pdf extension is still tried
-	return [{ contentUri: value, contentType: "application/pdf" }];
+	throw new Error(`Input source is neither an http(s) URL nor an attachment array: "${value}"`);
 }
 
 export const handler = defineFunction(async (event) => {

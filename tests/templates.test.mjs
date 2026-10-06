@@ -117,6 +117,27 @@ test("resolveContent downloads when the content is an attachment list", async ()
 	assert.ok(text.startsWith("REPORTE GENERAL DE SINIESTRO"));
 });
 
+test("a bare http(s) URL is read as a one-PDF attachment list", () => {
+	assert.deepEqual(core.asPdfUrl("  https://ejemplo.com/reporte  "), [
+		{ contentUri: "https://ejemplo.com/reporte", contentType: "application/pdf" },
+	]);
+	for (const content of [
+		"Hola Juan, tu pedido #4521 está listo.",
+		"Ver https://ejemplo.com/reporte.pdf", // contains a link, but is text
+		"https://ejemplo.com/reporte.pdf gracias", // more than the URL
+		"ftp://ejemplo.com/reporte.pdf",
+		"https://",
+	]) {
+		assert.equal(core.asPdfUrl(content), null, `should stay text: ${content}`);
+	}
+});
+
+test("resolveContent downloads when the content is a bare PDF URL", async () => {
+	const { text, extracted } = await core.resolveContent(`${origin}/103967-2026.pdf`);
+	assert.equal(extracted.source, "103967-2026.pdf");
+	assert.ok(text.startsWith("REPORTE GENERAL DE SINIESTRO"));
+});
+
 test("resolveContent passes text through untouched", async () => {
 	const { text, extracted } = await core.resolveContent("Hola Juan");
 	assert.equal(text, "Hola Juan");

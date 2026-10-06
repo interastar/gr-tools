@@ -12,14 +12,15 @@ import type { ParseResult } from "./types";
  * The content may arrive as plain text or as a list of attachments, and callers
  * are not always able to tell which — a Genesys Data Action passes everything
  * through a single string input. So a `content` string that turns out to be a
- * JSON array of attachments is treated as one; anything else is text.
+ * JSON array of attachments, or nothing but an http(s) URL, is downloaded and
+ * read as a PDF; anything else is text.
  *
  * Importing this module bundles unpdf. A caller that only ever has text should
  * use `parseTextWithTemplate` from `./core-text` instead.
  */
 
 export interface ParseWithTemplateInput extends TemplateSource {
-	/** Plain text, or the JSON representation of an attachment array. */
+	/** Plain text, the JSON representation of an attachment array, or a PDF URL. */
 	content?: string;
 	/** Attachments as a real array, when the caller already has one. */
 	attachments?: Attachment[];
@@ -57,6 +58,27 @@ export function asAttachmentList(content: string): Attachment[] | null {
 	return looksLikeAttachments ? (parsed as Attachment[]) : null;
 }
 
+/** A whole content that is a single http(s) URL, with nothing around it. */
+const BARE_URL = /^https?:\/\/\S+$/i;
+
+/**
+ * Returns the one-item attachment list a bare PDF URL stands for, or null if
+ * the string is anything else. The whole (trimmed) string must be the URL: text
+ * that merely contains a link is still text. The caller is taken at its word
+ * that the URL is a PDF, so a link without a .pdf extension is still tried —
+ * and a download that turns out not to be a PDF fails as such.
+ */
+export function asPdfUrl(content: string): Attachment[] | null {
+	const trimmed = content.trim();
+	if (!BARE_URL.test(trimmed)) return null;
+	try {
+		new URL(trimmed);
+	} catch {
+		return null;
+	}
+	return [{ contentUri: trimmed, contentType: "application/pdf" }];
+}
+
 /** Decides whether to parse the request's own text or to go download a PDF. */
 export async function resolveContent(content?: string, attachments?: Attachment[]): Promise<ResolvedContent> {
 	if (attachments?.length) {
@@ -68,7 +90,7 @@ export async function resolveContent(content?: string, attachments?: Attachment[
 		throw new Error("Missing required input: content or attachments");
 	}
 
-	const list = asAttachmentList(content);
+	const list = asAttachmentList(content) ?? asPdfUrl(content);
 	if (!list) return { text: content };
 
 	const extracted = await extractPdfText(list);
